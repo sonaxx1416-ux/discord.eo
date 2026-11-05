@@ -10,7 +10,7 @@
 #
 # كل حدث يشتغل داخل prc: لو كودك طلع فيه خطأ أو علّق، يطبع الخطأ والبوت يكمل.
 
-const VERSION = "1.0.0"
+const VERSION = "1.1.0"
 const API = "https://discord.com/api/v10"
 const GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
@@ -24,6 +24,8 @@ const MESSAGE_CONTENT = 32768
 const DEFAULT_INTENTS = 37377
 
 const COLOR = 16281969
+const COMPONENTS_V2 = 32768
+const HIDDEN = 64
 
 # مستخدم ديسكورد
 struct User {
@@ -61,6 +63,13 @@ struct Bot {
     seq
     ws
     running @bool = false
+    app_id @string
+    guild_id @string
+    ui @map
+    components @map
+    slash_commands @map
+    next_id @int = 0
+    id_prefix @string
 }
 
 # ═════ تسجيل الأحداث والأوامر ═════
@@ -87,12 +96,12 @@ func Bot.command name @string, f @lambda {
 
 # bot.send channel_id, "نص"   أو   bot.send channel_id, {"content": "...", "embeds": [...]}
 func Bot.send channel_id @string, content {
-    return self.request("POST", "/channels/" + channel_id + "/messages", message_body(content))
+    return self.request("POST", "/channels/" + channel_id + "/messages", message_body(self, content))
 }
 
 # msg.reply "pong"   (رد على الرسالة نفسها)
 func Message.reply content {
-    var body = message_body(content)
+    var body = message_body(self.bot, content)
     body["message_reference"] = {"message_id": self.id}
     body["allowed_mentions"] = {"replied_user": false}
     return self.bot.request("POST", "/channels/" + self.channel_id + "/messages", body)
@@ -106,6 +115,11 @@ func Message.send content {
 # msg.react "👍"
 func Message.react emoji @string {
     return self.bot.request("PUT", "/channels/" + self.channel_id + "/messages/" + self.id + "/reactions/" + url_encode(emoji) + "/@me", none)
+}
+
+# msg.edit "نص جديد"   (يعدل رسالة أرسلها البوت)
+func Message.edit content {
+    return self.bot.request("PATCH", "/channels/" + self.channel_id + "/messages/" + self.id, message_body(self.bot, content))
 }
 
 # msg.delete
@@ -123,9 +137,31 @@ func embed title @string, text @string {
     return {"title": title, "description": text, "color": COLOR}
 }
 
-func message_body content {
-    if type(content) == "map" {
+# أي شي ترسله (نص، قاموس، Embed، View، LayoutView، Container) يتحول لجسم رسالة ديسكورد
+func message_body b, content {
+    var t = type(content)
+    if t == "map" {
         return content
+    }
+    if t == "View" {
+        var body = {}
+        if content.content != "" {
+            body["content"] = content.content
+        }
+        if len(content.embeds) > 0 {
+            body["embeds"] = map(content.embeds, lambda e { embed_json(e) })
+        }
+        body["components"] = view_rows(b, content)
+        return body
+    }
+    if t == "LayoutView" {
+        return {"flags": COMPONENTS_V2, "components": build_items(b, content.items)}
+    }
+    if t == "Container" {
+        return {"flags": COMPONENTS_V2, "components": build_items(b, [content])}
+    }
+    if t == "Embed" {
+        return {"embeds": [embed_json(content)]}
     }
     return {"content": string(content)}
 }
@@ -289,8 +325,15 @@ func Bot._dispatch t @string, d {
         self.session_id = text_of(d, "session_id")
         self.resume_url = text_of(d, "resume_gateway_url") + "/?v=10&encoding=json"
         self.user = make_user(d["user"])
+        self.app_id = self.user.id
+        if has(d, "application") and d["application"] != none {
+            self.app_id = text_of(d["application"], "id")
+        }
         self._log "Online as " + self.user.name
+        self._register_slash()
         self._emit("ready", [])
+    } elif t == "INTERACTION_CREATE" {
+        self._interaction(d)
     } elif t == "RESUMED" {
         self._log "Reconnected"
     } elif t == "MESSAGE_CREATE" {
@@ -368,4 +411,685 @@ func make_user d {
 
 func make_message b @Bot, d {
     return Message{id: text_of(d, "id"), content: text_of(d, "content"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), author: make_user(d["author"]), bot: b, raw: d}
+}
+
+# ═════════════════════════════════════════════
+#  Embed
+# ═════════════════════════════════════════════
+
+# var e = discord.Embed("العنوان", "النص")
+# e.field "الاسم", "القيمة"     e.image = "https://..."     msg.reply e
+struct Embed {
+    title @string
+    description @string
+    color @int = COLOR
+    url @string
+    image @string
+    thumbnail @string
+    footer @string
+    author @string
+    fields @list
+}
+
+func Embed.field name @string, value @string {
+    append self.fields, {"name": name, "value": value, "inline": false}
+    return self
+}
+
+# حقول جنب بعض
+func Embed.inline name @string, value @string {
+    append self.fields, {"name": name, "value": value, "inline": true}
+    return self
+}
+
+func embed_json e {
+    if type(e) == "map" {
+        return e
+    }
+    var j = {"color": e.color}
+    if e.title != "" {
+        j["title"] = e.title
+    }
+    if e.description != "" {
+        j["description"] = e.description
+    }
+    if e.url != "" {
+        j["url"] = e.url
+    }
+    if e.image != "" {
+        j["image"] = {"url": e.image}
+    }
+    if e.thumbnail != "" {
+        j["thumbnail"] = {"url": e.thumbnail}
+    }
+    if e.footer != "" {
+        j["footer"] = {"text": e.footer}
+    }
+    if e.author != "" {
+        j["author"] = {"name": e.author}
+    }
+    if len(e.fields) > 0 {
+        j["fields"] = e.fields
+    }
+    return j
+}
+
+# ═════════════════════════════════════════════
+#  الأزرار والقوائم (View)
+# ═════════════════════════════════════════════
+
+# زر:  discord.Button("النص", lambda i { ... })
+# style: "blue" "gray" "green" "red"  (أو primary secondary success danger)
+struct Button {
+    label @string
+    callback
+    style @string = "blue"
+    emoji @string
+    url @string
+    id @string
+    disabled @bool = false
+}
+
+# قائمة اختيار. kind: "text" "user" "role" "channel" "mention"
+struct Select {
+    placeholder @string
+    options @list
+    callback
+    kind @string = "text"
+    id @string
+    min @int = 1
+    max @int = 1
+    disabled @bool = false
+}
+
+# رسالة فيها أزرار وقوائم:  var view = discord.View("النص فوق الأزرار")
+struct View {
+    content @string
+    items @list
+    embeds @list
+}
+
+# view.button "النص", lambda i { ... }   يرجع الزر عشان تعدله: b.style = "red"
+func View.button label @string, f {
+    var b = Button(label, f)
+    append self.items, b
+    return b
+}
+
+# view.link "الموقع", "https://..."
+func View.link label @string, url @string {
+    var b = Button(label, none)
+    b.url = url
+    append self.items, b
+    return b
+}
+
+# view.select "اختر", ["أ", "ب"], lambda i { i.values[0] }
+func View.select placeholder @string, options @list, f {
+    var s = Select(placeholder, options, f)
+    append self.items, s
+    return s
+}
+
+func View.user_select placeholder @string, f {
+    var s = Select(placeholder, [], f)
+    s.kind = "user"
+    append self.items, s
+    return s
+}
+
+func View.role_select placeholder @string, f {
+    var s = Select(placeholder, [], f)
+    s.kind = "role"
+    append self.items, s
+    return s
+}
+
+func View.channel_select placeholder @string, f {
+    var s = Select(placeholder, [], f)
+    s.kind = "channel"
+    append self.items, s
+    return s
+}
+
+# أي زر أو قائمة سويتها بنفسك
+func View.add item {
+    append self.items, item
+    return item
+}
+
+# اللي بعدها ينزل سطر جديد
+func View.new_row {
+    append self.items, "row"
+}
+
+func View.embed e {
+    append self.embeds, e
+}
+
+# ═════════════════════════════════════════════
+#  Components V2: LayoutView و Container
+# ═════════════════════════════════════════════
+
+# var layout = discord.LayoutView()
+struct LayoutView {
+    items @list
+}
+
+# صندوق بخط ملون على الجنب:  var box = layout.container()
+struct Container {
+    items @list
+    color @int = COLOR
+    spoiler @bool = false
+}
+
+# نص وجنبه صورة صغيرة أو زر
+struct Section {
+    text @string
+    accessory
+}
+
+func LayoutView.container {
+    var c = Container()
+    append self.items, c
+    return c
+}
+func LayoutView.text t @string {
+    append self.items, text_display(t)
+}
+func LayoutView.separator {
+    append self.items, {"type": 14, "divider": true, "spacing": 1}
+}
+func LayoutView.space {
+    append self.items, {"type": 14, "divider": false, "spacing": 2}
+}
+func LayoutView.image url @string {
+    append self.items, gallery_json([url])
+}
+func LayoutView.gallery urls @list {
+    append self.items, gallery_json(urls)
+}
+func LayoutView.section t @string, accessory {
+    var s = Section(t, accessory)
+    append self.items, s
+    return s
+}
+func LayoutView.row {
+    var v = View()
+    append self.items, v
+    return v
+}
+
+func Container.text t @string {
+    append self.items, text_display(t)
+}
+func Container.separator {
+    append self.items, {"type": 14, "divider": true, "spacing": 1}
+}
+func Container.space {
+    append self.items, {"type": 14, "divider": false, "spacing": 2}
+}
+func Container.image url @string {
+    append self.items, gallery_json([url])
+}
+func Container.gallery urls @list {
+    append self.items, gallery_json(urls)
+}
+func Container.section t @string, accessory {
+    var s = Section(t, accessory)
+    append self.items, s
+    return s
+}
+func Container.row {
+    var v = View()
+    append self.items, v
+    return v
+}
+
+func text_display t {
+    return {"type": 10, "content": t}
+}
+
+func gallery_json urls @list {
+    return {"type": 12, "items": map(urls, lambda u { gallery_item(u) })}
+}
+
+func gallery_item u {
+    return {"media": {"url": string(u)}}
+}
+
+# ═════════════════════════════════════════════
+#  Modal (نموذج يكتب فيه العضو)
+# ═════════════════════════════════════════════
+
+# var form = discord.Modal("العنوان", lambda i { i.fields["الاسم"] })
+struct Modal {
+    title @string
+    callback
+    inputs @list
+    id @string
+}
+
+struct TextInput {
+    label @string
+    style @int = 1
+    placeholder @string
+    description @string
+    value @string
+    required @bool = true
+    min @int = 0
+    max @int = 4000
+    id @string
+}
+
+# سطر واحد
+func Modal.input label @string {
+    var t = TextInput(label)
+    append self.inputs, t
+    return t
+}
+
+# نص طويل
+func Modal.paragraph label @string {
+    var t = TextInput(label)
+    t.style = 2
+    append self.inputs, t
+    return t
+}
+
+# ═════════════════════════════════════════════
+#  أوامر السلاش (/ping)
+# ═════════════════════════════════════════════
+
+struct Command {
+    name @string
+    description @string
+    callback
+    options @list
+}
+
+struct Option {
+    name @string
+    description @string
+    kind @int = 3
+    required @bool = true
+    choices @list
+}
+
+# bot.slash "ping", "يرد pong", lambda i { i.reply "pong" }
+func Bot.slash name @string, description @string, f {
+    var c = Command(lower(name), description, f)
+    self.slash_commands[lower(name)] = c
+    return c
+}
+
+func Command._opt name @string, description @string, kind @int {
+    var o = Option(lower(name), description, kind)
+    append self.options, o
+    return o
+}
+func Command.text name @string, description @string {
+    return self._opt(name, description, 3)
+}
+func Command.number name @string, description @string {
+    return self._opt(name, description, 4)
+}
+func Command.decimal name @string, description @string {
+    return self._opt(name, description, 10)
+}
+func Command.boolean name @string, description @string {
+    return self._opt(name, description, 5)
+}
+func Command.user name @string, description @string {
+    return self._opt(name, description, 6)
+}
+func Command.channel name @string, description @string {
+    return self._opt(name, description, 7)
+}
+func Command.role name @string, description @string {
+    return self._opt(name, description, 8)
+}
+
+# زر يشتغل حتى بعد ما تعيد تشغيل البوت: b.id = "verify"  ثم  bot.component "verify", lambda i { }
+func Bot.component id @string, f {
+    self.components[id] = f
+}
+
+func Bot._register_slash {
+    var names = keys(self.slash_commands)
+    if len(names) == 0 or self.app_id == "" {
+        return
+    }
+    var list = []
+    for n in names {
+        var c = self.slash_commands[n]
+        var opts = []
+        for o in c.options {
+            var j = {"type": o.kind, "name": o.name, "description": o.description, "required": o.required}
+            if len(o.choices) > 0 {
+                j["choices"] = map(o.choices, lambda ch { choice_json(ch) })
+            }
+            append opts, j
+        }
+        var desc = c.description
+        if desc == "" {
+            desc = c.name
+        }
+        append list, {"type": 1, "name": c.name, "description": desc, "options": opts}
+    }
+    var path = "/applications/" + self.app_id + "/commands"
+    if self.guild_id != "" {
+        path = "/applications/" + self.app_id + "/guilds/" + self.guild_id + "/commands"
+    }
+    var r = self.request("PUT", path, list)
+    if type(r) == "list" {
+        self._log "Slash commands ready: /" + join(names, " /")
+    }
+}
+
+func choice_json ch {
+    if type(ch) == "map" {
+        return ch
+    }
+    return {"name": string(ch), "value": ch}
+}
+
+# ═════════════════════════════════════════════
+#  Interaction (ضغطة زر، اختيار، نموذج، أمر سلاش)
+# ═════════════════════════════════════════════
+
+struct Interaction {
+    id @string
+    token @string
+    kind @int
+    name @string
+    custom_id @string
+    values @list
+    options @map
+    fields @map
+    user @User
+    channel_id @string
+    guild_id @string
+    message
+    bot
+    raw @map
+    responded @bool = false
+}
+
+func Interaction._callback kind @int, data {
+    self.responded = true
+    var body = {"type": kind}
+    if data != none {
+        body["data"] = data
+    }
+    return self.bot.request("POST", "/interactions/" + self.id + "/" + self.token + "/callback", body)
+}
+
+# i.reply "نص"   (أو View أو LayoutView أو Embed)
+func Interaction.reply content {
+    return self._callback(4, message_body(self.bot, content))
+}
+
+# رد يشوفه اللي ضغط بس
+func Interaction.reply_hidden content {
+    var body = message_body(self.bot, content)
+    body["flags"] = get(body, "flags", 0) + HIDDEN
+    return self._callback(4, body)
+}
+
+func Interaction.reply_embed title @string, text @string {
+    return self.reply(Embed(title, text))
+}
+
+# يعدل الرسالة اللي فيها الزر
+func Interaction.update content {
+    return self._callback(7, message_body(self.bot, content))
+}
+
+# "استنى شوي": لو بتاخذ أكثر من 3 ثواني، نادها أول شي وبعدين i.followup أو i.edit
+func Interaction.defer {
+    if self.kind == 3 {
+        return self._callback(6, none)
+    }
+    return self._callback(5, none)
+}
+
+# يفتح نموذج
+func Interaction.modal form @Modal {
+    return self._callback(9, modal_json(self.bot, form))
+}
+
+# رسالة إضافية بعد الرد
+func Interaction.followup content {
+    if not self.responded {
+        self.defer
+    }
+    return self.bot.request("POST", "/webhooks/" + self.bot.app_id + "/" + self.token, message_body(self.bot, content))
+}
+
+# يعدل ردك الأول
+func Interaction.edit content {
+    return self.bot.request("PATCH", "/webhooks/" + self.bot.app_id + "/" + self.token + "/messages/@original", message_body(self.bot, content))
+}
+
+func Bot._interaction d {
+    var i = make_interaction(self, d)
+    var f = none
+    if i.kind == 2 {
+        if has(self.slash_commands, i.name) {
+            f = self.slash_commands[i.name].callback
+        }
+    } elif i.kind == 3 or i.kind == 5 {
+        if has(self.ui, i.custom_id) {
+            f = self.ui[i.custom_id].callback
+        }
+        if f == none and has(self.components, i.custom_id) {
+            f = self.components[i.custom_id]
+        }
+    }
+    if f != none {
+        prc -s 60 {
+            f(i)
+        }
+    }
+    # زر ما رد: نقول لديسكورد وصلت عشان ما يطلع "This interaction failed"
+    if i.kind == 3 and not i.responded {
+        i.defer
+    }
+}
+
+func make_interaction b @Bot, d {
+    var data = get(d, "data", {})
+    if data == none {
+        data = {}
+    }
+    var u = none
+    if has(d, "member") and d["member"] != none {
+        u = d["member"]["user"]
+    } else {
+        u = get(d, "user", {})
+    }
+    var i = Interaction{id: text_of(d, "id"), token: text_of(d, "token"), kind: get(d, "type", 0), name: text_of(data, "name"), custom_id: text_of(data, "custom_id"), user: make_user(u), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), bot: b, raw: d}
+    if has(d, "message") and d["message"] != none {
+        i.message = make_message(b, d["message"])
+    }
+    i.values = get(data, "values", [])
+    if i.values == none {
+        i.values = []
+    }
+    var resolved = get(data, "resolved", {})
+    for o in get(data, "options", []) {
+        var v = get(o, "value", none)
+        if get(o, "type", 0) == 6 and resolved != none and has(resolved, "users") and has(resolved["users"], string(v)) {
+            v = make_user(resolved["users"][string(v)])
+        }
+        i.options[o["name"]] = v
+    }
+    for c in get(data, "components", []) {
+        if has(c, "component") {
+            read_field(i.fields, c["component"])
+        }
+        if has(c, "components") {
+            for cc in c["components"] {
+                read_field(i.fields, cc)
+            }
+        }
+    }
+    return i
+}
+
+func read_field fields @map, c {
+    if not has(c, "custom_id") {
+        return
+    }
+    if has(c, "value") {
+        fields[c["custom_id"]] = c["value"]
+    } elif has(c, "values") {
+        fields[c["custom_id"]] = c["values"]
+    }
+}
+
+# ═════════════════════════════════════════════
+#  تحويل المكونات لـ JSON
+# ═════════════════════════════════════════════
+
+func Bot._new_id {
+    if self.id_prefix == "" {
+        self.id_prefix = "eo" + string(random(100000, 999999))
+    }
+    self.next_id += 1
+    return self.id_prefix + "-" + string(self.next_id)
+}
+
+func Bot._track item {
+    if item.id == "" {
+        item.id = self._new_id()
+    }
+    self.ui[item.id] = item
+    return item.id
+}
+
+func build_items b, items @list {
+    var out = []
+    for x in items {
+        var t = type(x)
+        if t == "View" {
+            for r in view_rows(b, x) {
+                append out, r
+            }
+        } elif t == "Container" {
+            append out, {"type": 17, "accent_color": x.color, "spoiler": x.spoiler, "components": build_items(b, x.items)}
+        } elif t == "Section" {
+            append out, {"type": 9, "components": [text_display(x.text)], "accessory": accessory_json(b, x.accessory)}
+        } elif t == "string" {
+            append out, text_display(x)
+        } else {
+            append out, x
+        }
+    }
+    return out
+}
+
+func accessory_json b, a {
+    if type(a) == "Button" {
+        return button_json(b, a)
+    }
+    return {"type": 11, "media": {"url": string(a)}}
+}
+
+func view_rows b, v @View {
+    var rows = []
+    var cur = []
+    for item in v.items {
+        var t = type(item)
+        if t == "string" {
+            if len(cur) > 0 {
+                append rows, {"type": 1, "components": cur}
+                cur = []
+            }
+        } elif t == "Select" {
+            if len(cur) > 0 {
+                append rows, {"type": 1, "components": cur}
+                cur = []
+            }
+            append rows, {"type": 1, "components": [select_json(b, item)]}
+        } else {
+            if len(cur) == 5 {
+                append rows, {"type": 1, "components": cur}
+                cur = []
+            }
+            append cur, button_json(b, item)
+        }
+    }
+    if len(cur) > 0 {
+        append rows, {"type": 1, "components": cur}
+    }
+    return rows
+}
+
+func style_number s @string {
+    var styles = {"blue": 1, "primary": 1, "gray": 2, "grey": 2, "secondary": 2, "green": 3, "success": 3, "red": 4, "danger": 4}
+    return get(styles, lower(s), 1)
+}
+
+func emoji_json e @string {
+    var parts = split(e, ":")
+    if len(parts) == 2 {
+        return {"name": parts[0], "id": parts[1]}
+    }
+    return {"name": e}
+}
+
+func button_json b, btn @Button {
+    var j = {"type": 2, "label": btn.label, "disabled": btn.disabled}
+    if btn.url != "" {
+        j["style"] = 5
+        j["url"] = btn.url
+    } else {
+        j["style"] = style_number(btn.style)
+        j["custom_id"] = b._track(btn)
+    }
+    if btn.emoji != "" {
+        j["emoji"] = emoji_json(btn.emoji)
+    }
+    return j
+}
+
+func select_json b, s @Select {
+    var kinds = {"text": 3, "user": 5, "role": 6, "mention": 7, "channel": 8}
+    var j = {"type": get(kinds, s.kind, 3), "custom_id": b._track(s), "placeholder": s.placeholder, "min_values": s.min, "max_values": s.max, "disabled": s.disabled}
+    if j["type"] == 3 {
+        j["options"] = map(s.options, lambda o { option_json(o) })
+    }
+    return j
+}
+
+func option_json o {
+    if type(o) == "map" {
+        return o
+    }
+    return {"label": string(o), "value": string(o)}
+}
+
+func modal_json b, form @Modal {
+    var labels = []
+    for t in form.inputs {
+        var id = t.id
+        if id == "" {
+            id = t.label
+        }
+        var input = {"type": 4, "custom_id": id, "style": t.style, "required": t.required, "min_length": t.min, "max_length": t.max}
+        if t.placeholder != "" {
+            input["placeholder"] = t.placeholder
+        }
+        if t.value != "" {
+            input["value"] = t.value
+        }
+        var label = {"type": 18, "label": t.label, "component": input}
+        if t.description != "" {
+            label["description"] = t.description
+        }
+        append labels, label
+    }
+    return {"custom_id": b._track(form), "title": form.title, "components": labels}
 }

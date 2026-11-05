@@ -1,0 +1,77 @@
+# أزرار، قوائم، Container، نماذج، وأوامر سلاش
+import discord
+
+load_env()
+var bot = discord.Bot(env("DISCORD_TOKEN"))
+# bot.guild_id = "رقم_سيرفرك"    # عشان أوامر السلاش تطلع على طول وقت التجربة
+
+# ── !menu: أزرار وقائمة ──
+bot.command "menu", lambda msg, args {
+    var view = discord.View("اختر:")
+
+    view.button "👍 حلو", lambda i {
+        i.reply "شكرًا " + i.user.display_name
+    }
+
+    var del = view.button "احذف", lambda i { i.message.delete }
+    del.style = "red"
+
+    view.link "الموقع", "https://eolang.netlify.app"
+
+    view.select "لونك المفضل", ["أحمر", "أزرق", "أخضر"], lambda i {
+        i.reply_hidden "اخترت " + i.values[0]
+    }
+
+    msg.reply view
+}
+
+# ── !card: Components V2 ──
+bot.command "card", lambda msg, args {
+    var layout = discord.LayoutView()
+    var box = layout.container()
+
+    box.text "## هلا " + msg.author.display_name
+    box.text "هذي رسالة بالتصميم الجديد حق ديسكورد"
+    box.separator
+    box.section "**eo**\nلغة برمجة بسيطة", "https://cdn.discordapp.com/embed/avatars/0.png"
+
+    var row = box.row()
+    var yes = row.button "تمام", lambda i {
+        var done = discord.LayoutView()
+        var b = done.container()
+        b.color = 5763719
+        b.text "✅ " + i.user.display_name + " ضغط تمام"
+        i.update done
+    }
+    yes.style = "green"
+
+    msg.reply layout
+}
+
+# ── /register: نموذج ──
+bot.slash "register", "سجّل معنا", lambda i {
+    var form = discord.Modal("التسجيل", lambda r {
+        r.reply_embed "أهلًا " + r.fields["الاسم"], get(r.fields, "نبذة عنك", "")
+    })
+    form.input "الاسم"
+    var about = form.paragraph "نبذة عنك"
+    about.required = false
+    about.placeholder = "اكتب شي عنك"
+    i.modal form
+}
+
+# ── /say: خيارات ──
+var say = bot.slash "say", "يكرر كلامك", lambda i {
+    var times = get(i.options, "times", 1)
+    var words = []
+    for k in range(times) {
+        append words, i.options["text"]
+    }
+    i.reply join(words, " ")
+}
+say.text "text", "وش أقول"
+var times = say.number "times", "كم مرة"
+times.required = false
+times.choices = [1, 2, 3]
+
+bot.run

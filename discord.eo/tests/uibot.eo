@@ -1,0 +1,71 @@
+import discord
+var bot = discord.Bot("good")
+bot.api = "http://127.0.0.1:8791/api/v10"
+bot.gateway = "ws://127.0.0.1:8791/?v=10&encoding=json"
+
+bot.command "menu", lambda msg, args {
+    var view = discord.View("اختر:")
+    view.button "👍 حلو", lambda i {
+        print "button by", i.user.name, "on", i.message.id
+        i.reply "شكرًا!"
+    }
+    var del = view.button "بدون رد", lambda i {
+        print "silent button"
+    }
+    del.style = "red"
+    view.link "الموقع", "https://eolang.netlify.app"
+    view.select "لونك", ["أحمر", {"label": "أزرق", "value": "blue"}], lambda i {
+        print "select", i.values[0]
+        i.reply_hidden "اخترت " + i.values[0]
+    }
+    msg.reply view
+}
+
+bot.slash "register", "سجل معنا", lambda i {
+    var form = discord.Modal("التسجيل", lambda r {
+        print "modal", r.fields["الاسم"], r.fields["نبذة"]
+        r.reply "هلا " + r.fields["الاسم"]
+    })
+    form.input "الاسم"
+    form.paragraph "نبذة"
+    i.modal form
+}
+
+var say = bot.slash "say", "يكرر كلامك", lambda i {
+    print "say", i.options["text"], i.options["who"].name
+    i.reply i.options["who"].display_name + ": " + i.options["text"]
+}
+say.text "text", "وش أقول"
+say.user "who", "مين"
+
+bot.command "card", lambda msg, args {
+    var layout = discord.LayoutView()
+    var box = layout.container()
+    box.text "## مرحبا " + msg.author.display_name
+    box.separator
+    box.section "eo لغة برمجة", "https://x/logo.png"
+    box.section "زر جنب النص", discord.Button("اضغط", lambda i {
+        print "section button"
+        i.followup "followup!"
+    })
+    var row = box.row()
+    var go = row.button "ابدأ", lambda i {
+        print "row button -> update"
+        var done = discord.LayoutView()
+        done.text "✅ تم"
+        i.update done
+    }
+    go.style = "green"
+    msg.reply layout
+}
+
+bot.component "verify", lambda i {
+    print "persistent verify"
+    var e = discord.Embed("تم التحقق", "أهلًا")
+    e.inline "العضو", i.user.name
+    i.reply_hidden e
+}
+
+bot.command "stop", lambda msg, args { bot.stop }
+bot.run
+print "ended"

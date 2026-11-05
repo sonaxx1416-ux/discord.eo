@@ -27,7 +27,7 @@ eo get https://github.com/USER/discord.eo
 
 ينزل `discord.eo` جنب ملفاتك، وتستخدمه بـ `import discord`. أو انسخ `discord.eo` يدويًا جنب ملف البوت.
 
-> تحتاج eo بإصدار فيه `struct` و `http` و `ws_connect` (من بعد eo-language 1.8).
+> تحتاج eo 1.9 أو أحدث.
 
 ## تجهيز البوت في ديسكورد
 
@@ -108,6 +108,7 @@ bot.command "say", lambda msg, args {
 | `msg.send "نص"` | ترسل رسالة عادية في نفس القناة |
 | `msg.react "👍"` | تحط رياكشن |
 | `msg.reply_embed "العنوان", "النص"` | ترد بصندوق مرتب |
+| `msg.edit "نص"` | تعدل رسالة أرسلها البوت |
 | `msg.delete` | تحذف الرسالة (تحتاج صلاحية Manage Messages) |
 
 ## البوت `bot`
@@ -121,7 +122,10 @@ bot.command "say", lambda msg, args {
 | `bot.user` | البوت نفسه (بعد `ready`) |
 | `bot.on name, f` | يسجّل حدث |
 | `bot.command name, f` | يسجّل أمر |
-| `bot.send channel_id, "نص"` | يرسل رسالة لأي قناة |
+| `bot.send channel_id, "نص"` | يرسل رسالة لأي قناة (نص أو View أو LayoutView أو Embed) |
+| `bot.slash name, description, f` | أمر سلاش (تحت) |
+| `bot.component id, f` | زر دايم (تحت) |
+| `bot.guild_id` | سيرفر التجربة لأوامر السلاش |
 | `bot.request(method, path, body)` | أي طلب لـ [Discord API](https://discord.com/developers/docs/reference)، مثل `bot.request("GET", "/users/@me", none)` |
 | `bot.run` | يشغّل البوت (ما يرجع إلا لما يوقف) |
 | `bot.stop` | يوقف البوت |
@@ -146,6 +150,178 @@ bot.intents = discord.GUILDS + discord.GUILD_MESSAGES + discord.MESSAGE_CONTENT 
 
 ---
 
+## الأزرار والقوائم: `View`
+
+```eo
+bot.command "menu", lambda msg, args {
+    var view = discord.View("اختر:")
+
+    view.button "👍 حلو", lambda i {
+        i.reply "شكرًا " + i.user.display_name
+    }
+
+    var del = view.button "احذف", lambda i { i.message.delete }
+    del.style = "red"
+
+    view.link "الموقع", "https://eolang.netlify.app"
+
+    view.select "لونك المفضل", ["أحمر", "أزرق", "أخضر"], lambda i {
+        i.reply_hidden "اخترت " + i.values[0]
+    }
+
+    msg.reply view
+}
+```
+
+| | |
+|---|---|
+| `discord.View("نص")` | رسالة فيها أزرار (النص اختياري: `discord.View()`) |
+| `view.button "نص", f` | زر. يرجع الزر عشان تعدله |
+| `view.link "نص", url` | زر يفتح رابط |
+| `view.select "نص", [خيارات], f` | قائمة. الخيار نص، أو `{"label", "value", "description", "emoji"}` |
+| `view.user_select` ، `role_select` ، `channel_select` `"نص", f` | قائمة أعضاء / رتب / قنوات |
+| `view.new_row` | اللي بعدها ينزل سطر جديد (الأزرار تترتب 5 في كل سطر لحالها) |
+| `view.embed e` | يحط Embed فوق الأزرار |
+
+تعدّل الزر بعد ما تسويه: `b.style` (`"blue"` `"gray"` `"green"` `"red"`)، `b.emoji = "🔥"`، `b.disabled = true`، `b.id = "اسم"`.
+وفي القائمة: `s.min` و `s.max` (كم خيار يختار)، `s.disabled`.
+
+## Components V2: `LayoutView` و `Container`
+
+```eo
+bot.command "card", lambda msg, args {
+    var layout = discord.LayoutView()
+    var box = layout.container()
+
+    box.text "## هلا " + msg.author.display_name
+    box.separator
+    box.section "eo لغة برمجة بسيطة", "https://example.com/logo.png"
+    box.image "https://example.com/banner.png"
+
+    var row = box.row()
+    row.button "ابدأ", lambda i { i.reply_hidden "يلا!" }
+
+    msg.reply layout
+}
+```
+
+| | |
+|---|---|
+| `discord.LayoutView()` | رسالة بالتصميم الجديد |
+| `layout.container()` | صندوق بخط ملون. `box.color = 5793266` تغير اللون، `box.spoiler = true` |
+| `.text "markdown"` | نص (يدعم `#` و `**` و `-`) |
+| `.separator` / `.space` | خط فاصل / مسافة فاضية |
+| `.section "نص", "رابط صورة"` | نص وجنبه صورة صغيرة |
+| `.section "نص", discord.Button("زر", f)` | نص وجنبه زر |
+| `.image url` / `.gallery [urls]` | صورة / معرض صور (لين 10) |
+| `.row()` | سطر أزرار وقوائم، وهو `View` فتستخدم `.button` `.select` ... |
+
+كل هذي موجودة في `LayoutView` وفي `Container`. رسالة LayoutView ما تقدر تحط فيها `content` ولا embeds عادية (هذا قانون ديسكورد).
+
+## الضغطات: `i` (Interaction)
+
+كل زر وقائمة ونموذج وأمر سلاش يوصلك `i`:
+
+| الحقل | وش فيه |
+|---|---|
+| `i.user` | اللي ضغط (User) |
+| `i.message` | الرسالة اللي فيها الزر (Message) |
+| `i.values` | اللي اختاره من القائمة |
+| `i.fields` | اللي كتبه في النموذج |
+| `i.options` | خيارات أمر السلاش |
+| `i.channel_id` ، `i.guild_id` ، `i.raw` | |
+
+| الـ method | وش تسوي |
+|---|---|
+| `i.reply x` | يرد (x نص أو View أو LayoutView أو Embed) |
+| `i.reply_hidden x` | رد يشوفه اللي ضغط بس |
+| `i.update x` | يعدل الرسالة اللي فيها الزر |
+| `i.modal form` | يفتح نموذج |
+| `i.defer` | "استنى" لو بتاخذ أكثر من 3 ثواني |
+| `i.followup x` | رسالة ثانية بعد الرد |
+| `i.edit x` | يعدل ردك |
+
+لازم ترد خلال **3 ثواني**. لو الزر ما رد بشي، المكتبة تقول لديسكورد "وصلت" لحالها عشان ما يطلع "This interaction failed".
+
+## النماذج: `Modal`
+
+```eo
+var form = discord.Modal("التسجيل", lambda i {
+    i.reply "هلا " + i.fields["الاسم"]
+})
+form.input "الاسم"
+var about = form.paragraph "نبذة عنك"
+about.required = false
+about.placeholder = "اكتب شي عنك"
+
+i.modal form     # من داخل زر أو أمر سلاش
+```
+
+`form.input` سطر واحد، `form.paragraph` نص طويل. تعدل: `placeholder` `value` `description` `required` `min` `max` `id`. الجواب في `i.fields["اسم الحقل"]` (أو `id` لو حطيته). لين 5 حقول.
+
+## أوامر السلاش: `bot.slash`
+
+```eo
+bot.slash "ping", "يرد pong", lambda i {
+    i.reply "pong 🏓"
+}
+
+var say = bot.slash "say", "يكرر كلامك", lambda i {
+    i.reply i.options["text"]
+}
+say.text "text", "وش أقول"
+var n = say.number "times", "كم مرة"
+n.required = false
+```
+
+| نوع الخيار | يرجع في `i.options` |
+|---|---|
+| `.text` | نص |
+| `.number` | رقم صحيح |
+| `.decimal` | رقم بكسور |
+| `.boolean` | true / false |
+| `.user` | User |
+| `.channel` ، `.role` | الرقم (نص) |
+
+`opt.required = false` اختياري (لو ما كتبه ما يكون في `i.options`، استخدم `get(i.options, "times", 1)`). `opt.choices = ["أ", "ب"]` يخليه يختار من قائمة.
+
+الأوامر تتسجل لحالها لما البوت يشتغل. التسجيل العام (لكل السيرفرات) ممكن ياخذ وقت لين يطلع، فوقت التجربة حط رقم سيرفرك: `bot.guild_id = "123..."` ويطلع على طول. لازم تضيف البوت بصلاحية `applications.commands` (في OAuth2 اختر `bot` و `applications.commands`).
+
+## أزرار تعيش بعد إعادة التشغيل
+
+الأزرار العادية تنسى بعد ما تطفي البوت. لو تبي زر يشتغل دايمًا (زر تحقق مثلًا)، أعطه اسم وسجله:
+
+```eo
+bot.component "verify", lambda i {
+    i.reply_hidden "تم التحقق ✅"
+}
+
+bot.command "setup", lambda msg, args {
+    var view = discord.View("اضغط للتحقق")
+    var b = view.button "تحقق", none
+    b.id = "verify"
+    msg.send view
+}
+```
+
+## Embed
+
+```eo
+var e = discord.Embed("العنوان", "النص")
+e.field "الاسم", "القيمة"
+e.inline "جنب", "بعض"
+e.image = "https://..."
+e.thumbnail = "https://..."
+e.footer = "discord.eo"
+e.author = "eo"
+e.color = 5793266
+msg.reply e
+```
+
+`discord.embed(title, text)` القديمة لسا موجودة وترجع قاموس.
+
+---
+
 ## أشياء لازم تعرفها
 
 - **كل حدث وكل أمر يشتغل داخل `prc` بحد دقيقة.** لو كودك طلع فيه خطأ، يطبعه والبوت يكمل:
@@ -163,6 +339,7 @@ bot.intents = discord.GUILDS + discord.GUILD_MESSAGES + discord.MESSAGE_CONTENT 
 
 ```bash
 node tests/run.js path\to\eo.exe
+node tests/run_ui.js path\to\eo.exe
 ```
 ```
 sent to Discord: [ 'pong', 'hello world', 'reaction', 'pong', 'embed:Bye' ]
