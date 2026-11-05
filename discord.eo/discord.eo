@@ -10,22 +10,34 @@
 #
 # كل حدث يشتغل داخل prc: لو كودك طلع فيه خطأ أو علّق، يطبع الخطأ والبوت يكمل.
 
-const VERSION = "1.1.0"
+const VERSION = "1.2.0"
 const API = "https://discord.com/api/v10"
 const GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 # Intents: وش الأحداث اللي يبيها البوت (اجمعها: discord.GUILDS + discord.GUILD_MESSAGES)
 const GUILDS = 1
 const GUILD_MEMBERS = 2
+const GUILD_MODERATION = 4
+const GUILD_EMOJIS = 8
+const GUILD_INVITES = 64
+const GUILD_VOICE_STATES = 128
+const GUILD_PRESENCES = 256
 const GUILD_MESSAGES = 512
 const GUILD_MESSAGE_REACTIONS = 1024
 const DIRECT_MESSAGES = 4096
+const DIRECT_MESSAGE_REACTIONS = 8192
 const MESSAGE_CONTENT = 32768
-const DEFAULT_INTENTS = 37377
+# الافتراضي: السيرفرات، الرسائل، الخاص، الرياكشنات، ونص الرسائل
+const DEFAULT_INTENTS = 46593
+# كل شي (GUILD_MEMBERS و GUILD_PRESENCES و MESSAGE_CONTENT لازم تفعلها في Developer Portal)
+const ALL_INTENTS = 47103
 
 const COLOR = 16281969
 const COMPONENTS_V2 = 32768
 const HIDDEN = 64
+
+# الأحداث اللي تجيك بأسماء سهلة (والباقي بأسماء ديسكورد: "GUILD_BAN_ADD" ...)
+const EVENTS = ["ready", "message", "message_edit", "message_delete", "member_join", "member_leave", "member_update", "reaction_add", "reaction_remove", "guild_join", "guild_leave", "channel_create", "channel_delete"]
 
 # مستخدم ديسكورد
 struct User {
@@ -33,7 +45,10 @@ struct User {
     name @string
     display_name @string
     bot @bool
+    mention @string
+    avatar_url @string
     raw @map
+    client
 }
 
 # رسالة وصلت للبوت
@@ -45,6 +60,11 @@ struct Message {
     author @User
     bot
     raw @map
+    member
+    mentions @list
+    channel
+    guild
+    is_dm @bool = false
 }
 
 # البوت نفسه
@@ -70,6 +90,12 @@ struct Bot {
     slash_commands @map
     next_id @int = 0
     id_prefix @string
+    guilds @map
+    dm_channels @map
+    status @string = "online"
+    activity @string
+    activity_kind @int = 0
+    startup_guilds @map
 }
 
 # ═════ تسجيل الأحداث والأوامر ═════
@@ -78,7 +104,7 @@ struct Bot {
 # أو أي حدث من ديسكورد بالاسم: bot.on "GUILD_MEMBER_ADD", lambda data { ... }
 func Bot.on event @string, f @lambda {
     var key = event
-    if lower(event) == "ready" or lower(event) == "message" {
+    if lower(event) in EVENTS {
         key = lower(event)
     }
     if not has(self.handlers, key) {
@@ -167,8 +193,11 @@ func message_body b, content {
 }
 
 # أي طلب لـ Discord API:  bot.request("GET", "/users/@me", none)
-func Bot.request method @string, path @string, body {
+func Bot.request method @string, path @string, body = none, reason @string = "" {
     var headers = {"Authorization": "Bot " + self.token, "User-Agent": "DiscordBot (https://eolang.netlify.app, " + VERSION + ")"}
+    if reason != "" {
+        headers["X-Audit-Log-Reason"] = url_encode(reason)
+    }
     var tries = 0
     while true {
         var r = http(method, self.api + path, body, headers)
@@ -296,7 +325,7 @@ func Bot._connect url @string, resume @bool {
             if resume {
                 ws_send ws, {"op": 6, "d": {"token": self.token, "session_id": self.session_id, "seq": self.seq}}
             } else {
-                ws_send ws, {"op": 2, "d": {"token": self.token, "intents": self.intents, "properties": {"os": "windows", "browser": "eo", "device": "eo"}}}
+                ws_send ws, {"op": 2, "d": {"token": self.token, "intents": self.intents, "properties": {"os": "windows", "browser": "eo", "device": "eo"}, "presence": self._presence()}}
             }
         } elif op == 11 {
             acked = true
@@ -324,8 +353,12 @@ func Bot._dispatch t @string, d {
     if t == "READY" {
         self.session_id = text_of(d, "session_id")
         self.resume_url = text_of(d, "resume_gateway_url") + "/?v=10&encoding=json"
-        self.user = make_user(d["user"])
+        self.user = make_user(self, d["user"])
         self.app_id = self.user.id
+        self.startup_guilds = {}
+        for g in get(d, "guilds", []) {
+            self.startup_guilds[text_of(g, "id")] = true
+        }
         if has(d, "application") and d["application"] != none {
             self.app_id = text_of(d["application"], "id")
         }
@@ -342,6 +375,8 @@ func Bot._dispatch t @string, d {
         if not msg.author.bot {
             self._command(msg)
         }
+    } else {
+        self._dispatch_more(t, d)
     }
     self._emit(t, [d])
 }
@@ -400,17 +435,37 @@ func text_of m, key @string {
     return string(v)
 }
 
-func make_user d {
+func make_user b, d {
+    if d == none {
+        d = {}
+    }
+    var id = text_of(d, "id")
     var name = text_of(d, "username")
     var shown = text_of(d, "global_name")
     if shown == "" {
         shown = name
     }
-    return User{id: text_of(d, "id"), name: name, display_name: shown, bot: get(d, "bot", false) == true, raw: d}
+    var avatar = "https://cdn.discordapp.com/embed/avatars/0.png"
+    if text_of(d, "avatar") != "" {
+        avatar = "https://cdn.discordapp.com/avatars/" + id + "/" + text_of(d, "avatar") + ".png"
+    } elif is_digits(id) {
+        avatar = "https://cdn.discordapp.com/embed/avatars/" + string((int(id) / 4194304) % 6) + ".png"
+    }
+    return User{id: id, name: name, display_name: shown, bot: get(d, "bot", false) == true, mention: "<@" + id + ">", avatar_url: avatar, raw: d, client: b}
 }
 
 func make_message b @Bot, d {
-    return Message{id: text_of(d, "id"), content: text_of(d, "content"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), author: make_user(d["author"]), bot: b, raw: d}
+    var m = Message{id: text_of(d, "id"), content: text_of(d, "content"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), author: make_user(b, get(d, "author", {})), bot: b, raw: d}
+    m.is_dm = m.guild_id == ""
+    for u in get(d, "mentions", []) {
+        append m.mentions, make_user(b, u)
+    }
+    if has(d, "member") and d["member"] != none {
+        m.member = make_member(b, d["member"], m.guild_id, get(d, "author", {}))
+    }
+    m.guild = get(b.guilds, m.guild_id, none)
+    m.channel = b.channel(m.channel_id)
+    return m
 }
 
 # ═════════════════════════════════════════════
@@ -808,6 +863,8 @@ struct Interaction {
     options @map
     fields @map
     user @User
+    member
+    guild
     channel_id @string
     guild_id @string
     message
@@ -909,10 +966,14 @@ func make_interaction b @Bot, d {
     } else {
         u = get(d, "user", {})
     }
-    var i = Interaction{id: text_of(d, "id"), token: text_of(d, "token"), kind: get(d, "type", 0), name: text_of(data, "name"), custom_id: text_of(data, "custom_id"), user: make_user(u), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), bot: b, raw: d}
+    var i = Interaction{id: text_of(d, "id"), token: text_of(d, "token"), kind: get(d, "type", 0), name: text_of(data, "name"), custom_id: text_of(data, "custom_id"), user: make_user(b, u), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), bot: b, raw: d}
     if has(d, "message") and d["message"] != none {
         i.message = make_message(b, d["message"])
     }
+    if has(d, "member") and d["member"] != none {
+        i.member = make_member(b, d["member"], i.guild_id, u)
+    }
+    i.guild = get(b.guilds, i.guild_id, none)
     i.values = get(data, "values", [])
     if i.values == none {
         i.values = []
@@ -921,7 +982,7 @@ func make_interaction b @Bot, d {
     for o in get(data, "options", []) {
         var v = get(o, "value", none)
         if get(o, "type", 0) == 6 and resolved != none and has(resolved, "users") and has(resolved["users"], string(v)) {
-            v = make_user(resolved["users"][string(v)])
+            v = make_user(b, resolved["users"][string(v)])
         }
         i.options[o["name"]] = v
     }
@@ -1092,4 +1153,651 @@ func modal_json b, form @Modal {
         append labels, label
     }
     return {"custom_id": b._track(form), "title": form.title, "components": labels}
+}
+
+# ═════════════════════════════════════════════
+#  User: الخاص
+# ═════════════════════════════════════════════
+
+# user.send "هلا"   (رسالة على الخاص)
+func User.send content {
+    return self.client.dm(self.id, content)
+}
+
+# bot.dm user, "نص"   (user = رقم أو User أو Member)
+func Bot.dm user, content {
+    var id = id_of(user)
+    if not has(self.dm_channels, id) {
+        var ch = self.request("POST", "/users/@me/channels", {"recipient_id": id})
+        if ch == none or not has(ch, "id") {
+            self._log "Can't open a DM with " + id
+            return none
+        }
+        self.dm_channels[id] = string(ch["id"])
+    }
+    var r = self.request("POST", "/channels/" + self.dm_channels[id] + "/messages", message_body(self, content))
+    if r != none and get(r, "code", 0) == 50007 {
+        self._log "User " + id + " has DMs closed"
+        return none
+    }
+    return r
+}
+
+# bot.fetch_user "رقم"
+func Bot.fetch_user id {
+    var d = self.request("GET", "/users/" + id_of(id))
+    if d == none or not has(d, "id") {
+        return none
+    }
+    return make_user(self, d)
+}
+
+# ═════════════════════════════════════════════
+#  Member: عضو في سيرفر
+# ═════════════════════════════════════════════
+
+struct Member {
+    id @string
+    name @string
+    display_name @string
+    nick @string
+    mention @string
+    avatar_url @string
+    bot @bool
+    user @User
+    roles @list
+    joined_at @string
+    timed_out_until @string
+    permissions @string
+    guild_id @string
+    raw @map
+    client
+}
+
+func make_member b, d, guild_id, user_d {
+    if d == none {
+        d = {}
+    }
+    var ud = get(d, "user", none)
+    if ud == none {
+        ud = user_d
+    }
+    var u = make_user(b, ud)
+    var m = Member{id: u.id, name: u.name, display_name: u.display_name, nick: text_of(d, "nick"), mention: u.mention, avatar_url: u.avatar_url, bot: u.bot, user: u, joined_at: text_of(d, "joined_at"), timed_out_until: text_of(d, "communication_disabled_until"), permissions: text_of(d, "permissions"), guild_id: string(guild_id), raw: d, client: b}
+    if m.nick != "" {
+        m.display_name = m.nick
+    }
+    m.roles = map(get(d, "roles", []), lambda r { string(r) })
+    return m
+}
+
+func Member._path {
+    return "/guilds/" + self.guild_id + "/members/" + self.id
+}
+
+# member.send "هلا"   (خاص)
+func Member.send content {
+    return self.client.dm(self.id, content)
+}
+
+# member.kick   أو   member.kick "سبام"
+func Member.kick reason @string = "" {
+    return self.client.request("DELETE", self._path(), none, reason)
+}
+
+# member.ban   أو   member.ban "سبب", 1   (الرقم = كم يوم من رسايله ينحذف، لين 7)
+func Member.ban reason @string = "", delete_days @int = 0 {
+    return self.client.request("PUT", "/guilds/" + self.guild_id + "/bans/" + self.id, {"delete_message_seconds": delete_days * 86400}, reason)
+}
+
+# member.timeout 600   (يسكته 10 دقايق، لين 28 يوم)
+func Member.timeout seconds, reason @string = "" {
+    var until = time_iso(now() + seconds)
+    self.timed_out_until = until
+    return self.client.request("PATCH", self._path(), {"communication_disabled_until": until}, reason)
+}
+
+func Member.untimeout reason @string = "" {
+    self.timed_out_until = ""
+    return self.client.request("PATCH", self._path(), {"communication_disabled_until": none}, reason)
+}
+
+# member.add_role role   (role = Role أو رقمها)
+func Member.add_role role, reason @string = "" {
+    var id = id_of(role)
+    if not (id in self.roles) {
+        append self.roles, id
+    }
+    return self.client.request("PUT", self._path() + "/roles/" + id, none, reason)
+}
+
+func Member.remove_role role, reason @string = "" {
+    var id = id_of(role)
+    self.roles = filter(self.roles, lambda r { r != id })
+    return self.client.request("DELETE", self._path() + "/roles/" + id, none, reason)
+}
+
+# member.has_role role   (Role أو رقمها أو اسمها)
+func Member.has_role role {
+    if type(role) == "string" and not (role in self.roles) {
+        var g = get(self.client.guilds, self.guild_id, none)
+        if g != none {
+            var r = g.find_role(role)
+            if r != none {
+                return r.id in self.roles
+            }
+        }
+        return false
+    }
+    return id_of(role) in self.roles
+}
+
+# member.set_nick "اسم"   ("" يرجعه لاسمه)
+func Member.set_nick nick @string, reason @string = "" {
+    self.nick = nick
+    return self.client.request("PATCH", self._path(), {"nick": nick}, reason)
+}
+
+# الرتب كـ Role (من الكاش)
+func Member.role_list {
+    var g = get(self.client.guilds, self.guild_id, none)
+    var out = []
+    if g == none {
+        return out
+    }
+    for r in g.roles {
+        if r.id in self.roles {
+            append out, r
+        }
+    }
+    return out
+}
+
+# ═════════════════════════════════════════════
+#  Guild: السيرفر
+# ═════════════════════════════════════════════
+
+struct Guild {
+    id @string
+    name @string
+    owner_id @string
+    member_count @int
+    icon_url @string
+    channels @list
+    roles @list
+    raw @map
+    client
+}
+
+struct Channel {
+    id @string
+    name @string
+    kind @int
+    topic @string
+    guild_id @string
+    parent_id @string
+    position @int
+    mention @string
+    raw @map
+    client
+}
+
+struct Role {
+    id @string
+    name @string
+    color @int
+    position @int
+    mention @string
+    guild_id @string
+    raw @map
+    client
+}
+
+# أنواع القنوات (channel.kind)
+const TEXT = 0
+const DM = 1
+const VOICE = 2
+const CATEGORY = 4
+const NEWS = 5
+const STAGE = 13
+const FORUM = 15
+
+func make_guild b, d {
+    var id = text_of(d, "id")
+    var icon = ""
+    if text_of(d, "icon") != "" {
+        icon = "https://cdn.discordapp.com/icons/" + id + "/" + text_of(d, "icon") + ".png"
+    }
+    var count = get(d, "member_count", none)
+    if count == none {
+        count = get(d, "approximate_member_count", 0)
+    }
+    var g = Guild{id: id, name: text_of(d, "name"), owner_id: text_of(d, "owner_id"), member_count: count, icon_url: icon, raw: d, client: b}
+    for c in get(d, "channels", []) {
+        append g.channels, make_channel(b, c, id)
+    }
+    for r in get(d, "roles", []) {
+        append g.roles, make_role(b, r, id)
+    }
+    return g
+}
+
+func make_channel b, d, guild_id {
+    var gid = text_of(d, "guild_id")
+    if gid == "" {
+        gid = string(guild_id)
+    }
+    var id = text_of(d, "id")
+    return Channel{id: id, name: text_of(d, "name"), kind: get(d, "type", 0), topic: text_of(d, "topic"), guild_id: gid, parent_id: text_of(d, "parent_id"), position: get(d, "position", 0), mention: "<#" + id + ">", raw: d, client: b}
+}
+
+func make_role b, d, guild_id {
+    var id = text_of(d, "id")
+    return Role{id: id, name: text_of(d, "name"), color: get(d, "color", 0), position: get(d, "position", 0), mention: "<@&" + id + ">", guild_id: string(guild_id), raw: d, client: b}
+}
+
+# guild.member "رقم"  → Member (من ديسكورد)
+func Guild.member user {
+    var d = self.client.request("GET", "/guilds/" + self.id + "/members/" + id_of(user))
+    if d == none or not has(d, "user") {
+        return none
+    }
+    return make_member(self.client, d, self.id, none)
+}
+
+# guild.members   أو   guild.members 500   (يحتاج GUILD_MEMBERS)
+func Guild.members limit @int = 1000 {
+    var out = []
+    var after = "0"
+    while len(out) < limit {
+        var n = limit - len(out)
+        if n > 1000 {
+            n = 1000
+        }
+        var page = self.client.request("GET", "/guilds/" + self.id + "/members?limit=" + string(n) + "&after=" + after)
+        if type(page) != "list" or len(page) == 0 {
+            break
+        }
+        for d in page {
+            append out, make_member(self.client, d, self.id, none)
+        }
+        after = out[len(out) - 1].id
+        if len(page) < n {
+            break
+        }
+    }
+    return out
+}
+
+func Guild.kick user, reason @string = "" {
+    return self.client.request("DELETE", "/guilds/" + self.id + "/members/" + id_of(user), none, reason)
+}
+
+func Guild.ban user, reason @string = "", delete_days @int = 0 {
+    return self.client.request("PUT", "/guilds/" + self.id + "/bans/" + id_of(user), {"delete_message_seconds": delete_days * 86400}, reason)
+}
+
+func Guild.unban user, reason @string = "" {
+    return self.client.request("DELETE", "/guilds/" + self.id + "/bans/" + id_of(user), none, reason)
+}
+
+# قائمة المبندين: كل واحد {"user": User, "reason": "..."}
+func Guild.bans {
+    var out = []
+    var page = self.client.request("GET", "/guilds/" + self.id + "/bans?limit=1000")
+    if type(page) != "list" {
+        return out
+    }
+    for d in page {
+        append out, {"user": make_user(self.client, d["user"]), "reason": text_of(d, "reason")}
+    }
+    return out
+}
+
+# guild.find_channel "general"   (بالاسم أو الرقم)
+func Guild.find_channel name {
+    for c in self.channels {
+        if c.id == string(name) or lower(c.name) == lower(string(name)) {
+            return c
+        }
+    }
+    return none
+}
+
+# guild.find_role "Admin"   (بالاسم أو الرقم)
+func Guild.find_role name {
+    for r in self.roles {
+        if r.id == string(name) or lower(r.name) == lower(string(name)) {
+            return r
+        }
+    }
+    return none
+}
+
+# guild.create_channel "اسم"   (أو guild.create_channel "صوت", discord.VOICE)
+func Guild.create_channel name @string, kind @int = 0, category = none {
+    var body = {"name": name, "type": kind}
+    if category != none {
+        body["parent_id"] = id_of(category)
+    }
+    var d = self.client.request("POST", "/guilds/" + self.id + "/channels", body)
+    if d == none or not has(d, "id") {
+        return none
+    }
+    var c = make_channel(self.client, d, self.id)
+    append self.channels, c
+    return c
+}
+
+# guild.create_role "VIP"   (أو guild.create_role "VIP", 16766720)
+func Guild.create_role name @string, color @int = 0 {
+    var d = self.client.request("POST", "/guilds/" + self.id + "/roles", {"name": name, "color": color})
+    if d == none or not has(d, "id") {
+        return none
+    }
+    var r = make_role(self.client, d, self.id)
+    append self.roles, r
+    return r
+}
+
+# البوت يطلع من السيرفر
+func Guild.leave {
+    return self.client.request("DELETE", "/users/@me/guilds/" + self.id)
+}
+
+# ═════════════════════════════════════════════
+#  Channel و Role
+# ═════════════════════════════════════════════
+
+func Channel.send content {
+    return self.client.send(self.id, content)
+}
+
+# آخر الرسائل (الأحدث أول)
+func Channel.history limit @int = 50 {
+    var out = []
+    var page = self.client.request("GET", "/channels/" + self.id + "/messages?limit=" + string(limit))
+    if type(page) != "list" {
+        return out
+    }
+    for d in page {
+        append out, make_message(self.client, d)
+    }
+    return out
+}
+
+# channel.purge 20   (يحذف آخر 20 رسالة، لين 100، وأحدث من 14 يوم)
+func Channel.purge count @int = 10 {
+    if count > 100 {
+        count = 100
+    }
+    var ids = map(self.history(count), lambda m { m.id })
+    if len(ids) == 0 {
+        return 0
+    }
+    if len(ids) == 1 {
+        self.client.request("DELETE", "/channels/" + self.id + "/messages/" + ids[0])
+    } else {
+        self.client.request("POST", "/channels/" + self.id + "/messages/bulk-delete", {"messages": ids})
+    }
+    return len(ids)
+}
+
+# "البوت يكتب..."
+func Channel.typing {
+    return self.client.request("POST", "/channels/" + self.id + "/typing")
+}
+
+func Channel.rename name @string {
+    self.name = name
+    return self.client.request("PATCH", "/channels/" + self.id, {"name": name})
+}
+
+func Channel.set_topic topic @string {
+    self.topic = topic
+    return self.client.request("PATCH", "/channels/" + self.id, {"topic": topic})
+}
+
+func Channel.delete reason @string = "" {
+    return self.client.request("DELETE", "/channels/" + self.id, none, reason)
+}
+
+func Role.delete reason @string = "" {
+    return self.client.request("DELETE", "/guilds/" + self.guild_id + "/roles/" + self.id, none, reason)
+}
+
+func Role.rename name @string {
+    self.name = name
+    return self.client.request("PATCH", "/guilds/" + self.guild_id + "/roles/" + self.id, {"name": name})
+}
+
+# ═════════════════════════════════════════════
+#  الكاش: bot.guild و bot.channel
+# ═════════════════════════════════════════════
+
+# bot.guild "رقم"  → Guild (من الكاش، أو يجيبه من ديسكورد)
+func Bot.guild id {
+    var gid = id_of(id)
+    if has(self.guilds, gid) {
+        return self.guilds[gid]
+    }
+    var d = self.request("GET", "/guilds/" + gid + "?with_counts=true")
+    if d == none or not has(d, "id") {
+        return none
+    }
+    var g = make_guild(self, d)
+    var chans = self.request("GET", "/guilds/" + gid + "/channels")
+    if type(chans) == "list" {
+        for c in chans {
+            append g.channels, make_channel(self, c, gid)
+        }
+    }
+    self.guilds[gid] = g
+    return g
+}
+
+# bot.channel "رقم"  → Channel (من الكاش، وإلا Channel فيه الرقم بس)
+func Bot.channel id {
+    var cid = id_of(id)
+    for gid in keys(self.guilds) {
+        for c in self.guilds[gid].channels {
+            if c.id == cid {
+                return c
+            }
+        }
+    }
+    return Channel{id: cid, mention: "<#" + cid + ">", client: self}
+}
+
+# كل السيرفرات اللي فيها البوت
+func Bot.guild_list {
+    return values(self.guilds)
+}
+
+# ═════════════════════════════════════════════
+#  الحالة: Playing / Watching ...
+# ═════════════════════════════════════════════
+
+# bot.playing "eo"   bot.watching "السيرفر"   bot.listening "قرآن"   bot.competing "بطولة"
+func Bot.playing text @string {
+    self._set_activity(text, 0)
+}
+func Bot.listening text @string {
+    self._set_activity(text, 2)
+}
+func Bot.watching text @string {
+    self._set_activity(text, 3)
+}
+func Bot.competing text @string {
+    self._set_activity(text, 5)
+}
+
+# bot.set_status "idle"   ("online" "idle" "dnd" "invisible")
+func Bot.set_status status @string {
+    self.status = status
+    self._send_presence()
+}
+
+func Bot._set_activity text @string, kind @int {
+    self.activity = text
+    self.activity_kind = kind
+    self._send_presence()
+}
+
+func Bot._presence {
+    var acts = []
+    if self.activity != "" {
+        append acts, {"name": self.activity, "type": self.activity_kind}
+    }
+    return {"since": none, "activities": acts, "status": self.status, "afk": false}
+}
+
+func Bot._send_presence {
+    if self.ws != none {
+        ws_send self.ws, {"op": 3, "d": self._presence()}
+    }
+}
+
+# ═════════════════════════════════════════════
+#  Reaction والأحداث الإضافية
+# ═════════════════════════════════════════════
+
+struct Reaction {
+    emoji @string
+    user_id @string
+    member
+    message_id @string
+    channel_id @string
+    guild_id @string
+    raw @map
+    client
+}
+
+# r.user()  → User (من ديسكورد)
+func Reaction.user {
+    return self.client.fetch_user(self.user_id)
+}
+
+# r.remove   (يشيل الرياكشن حق الشخص)
+func Reaction.remove {
+    return self.client.request("DELETE", "/channels/" + self.channel_id + "/messages/" + self.message_id + "/reactions/" + url_encode(self.emoji) + "/" + self.user_id)
+}
+
+func make_reaction b, d {
+    var e = get(d, "emoji", {})
+    var name = text_of(e, "name")
+    if text_of(e, "id") != "" {
+        name = name + ":" + text_of(e, "id")
+    }
+    var r = Reaction{emoji: name, user_id: text_of(d, "user_id"), message_id: text_of(d, "message_id"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), raw: d, client: b}
+    if has(d, "member") and d["member"] != none {
+        r.member = make_member(b, d["member"], r.guild_id, none)
+    }
+    return r
+}
+
+func Bot._dispatch_more t @string, d {
+    if t == "GUILD_CREATE" {
+        var g = make_guild(self, d)
+        self.guilds[g.id] = g
+        if has(self.startup_guilds, g.id) {
+            remove self.startup_guilds, g.id
+        } else {
+            self._emit("guild_join", [g])
+        }
+    } elif t == "GUILD_UPDATE" {
+        var g = get(self.guilds, text_of(d, "id"), none)
+        if g != none {
+            g.name = text_of(d, "name")
+            g.owner_id = text_of(d, "owner_id")
+            g.raw = d
+        }
+    } elif t == "GUILD_DELETE" {
+        var id = text_of(d, "id")
+        if get(d, "unavailable", false) != true and has(self.guilds, id) {
+            var g = self.guilds[id]
+            remove self.guilds, id
+            self._emit("guild_leave", [g])
+        }
+    } elif t == "GUILD_MEMBER_ADD" {
+        var m = make_member(self, d, text_of(d, "guild_id"), none)
+        var g = get(self.guilds, m.guild_id, none)
+        if g != none {
+            g.member_count += 1
+        }
+        self._emit("member_join", [m])
+    } elif t == "GUILD_MEMBER_REMOVE" {
+        var m = make_member(self, {"user": d["user"]}, text_of(d, "guild_id"), none)
+        var g = get(self.guilds, m.guild_id, none)
+        if g != none {
+            g.member_count -= 1
+        }
+        self._emit("member_leave", [m])
+    } elif t == "GUILD_MEMBER_UPDATE" {
+        self._emit("member_update", [make_member(self, d, text_of(d, "guild_id"), none)])
+    } elif t == "MESSAGE_UPDATE" {
+        if has(d, "author") {
+            self._emit("message_edit", [make_message(self, d)])
+        }
+    } elif t == "MESSAGE_DELETE" {
+        self._emit("message_delete", [Message{id: text_of(d, "id"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), author: make_user(self, {}), bot: self, raw: d}])
+    } elif t == "MESSAGE_REACTION_ADD" {
+        self._emit("reaction_add", [make_reaction(self, d)])
+    } elif t == "MESSAGE_REACTION_REMOVE" {
+        self._emit("reaction_remove", [make_reaction(self, d)])
+    } elif t == "CHANNEL_CREATE" or t == "CHANNEL_UPDATE" or t == "CHANNEL_DELETE" {
+        var c = make_channel(self, d, "")
+        var g = get(self.guilds, c.guild_id, none)
+        if g != none {
+            g.channels = filter(g.channels, lambda x { x.id != c.id })
+            if t != "CHANNEL_DELETE" {
+                append g.channels, c
+            }
+        }
+        if t == "CHANNEL_CREATE" {
+            self._emit("channel_create", [c])
+        } elif t == "CHANNEL_DELETE" {
+            self._emit("channel_delete", [c])
+        }
+    } elif t == "GUILD_ROLE_CREATE" or t == "GUILD_ROLE_UPDATE" or t == "GUILD_ROLE_DELETE" {
+        var gid = text_of(d, "guild_id")
+        var g = get(self.guilds, gid, none)
+        if g != none {
+            var rid = text_of(d, "role_id")
+            if has(d, "role") {
+                rid = text_of(d["role"], "id")
+            }
+            g.roles = filter(g.roles, lambda x { x.id != rid })
+            if t != "GUILD_ROLE_DELETE" {
+                append g.roles, make_role(self, d["role"], gid)
+            }
+        }
+    }
+}
+
+func is_digits s @string {
+    if s == "" or len(s) > 19 {
+        return false
+    }
+    for ch in s {
+        if not (ch in "0123456789") {
+            return false
+        }
+    }
+    return true
+}
+
+# رقم من أي شي: "123" أو User أو Member أو Channel أو Role أو Guild أو Message
+func id_of x {
+    var t = type(x)
+    if t == "string" {
+        return x
+    }
+    if t == "int" {
+        return string(x)
+    }
+    if t == "User" or t == "Member" or t == "Channel" or t == "Role" or t == "Guild" or t == "Message" {
+        return x.id
+    }
+    return string(x)
 }

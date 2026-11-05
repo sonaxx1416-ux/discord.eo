@@ -27,7 +27,7 @@ eo get https://github.com/USER/discord.eo
 
 ينزل `discord.eo` جنب ملفاتك، وتستخدمه بـ `import discord`. أو انسخ `discord.eo` يدويًا جنب ملف البوت.
 
-> تحتاج eo 1.9 أو أحدث.
+> تحتاج `eo.exe` الجديد (فيه القيم الافتراضية للدوال و `time_iso`).
 
 ## تجهيز البوت في ديسكورد
 
@@ -67,17 +67,29 @@ bot.on "message", lambda msg {
     }
 }
 
+bot.on "member_join", lambda m {
+    m.send "حياك في السيرفر " + m.mention
+}
+
 # أي حدث من ديسكورد باسمه، ويوصلك كقاموس
-bot.on "GUILD_MEMBER_ADD", lambda d {
-    print "New member: " + d["user"]["username"]
+bot.on "GUILD_BAN_ADD", lambda d {
+    print "ban: " + d["user"]["username"]
 }
 ```
 
-| الحدث | المعاملات |
-|---|---|
-| `"ready"` | بدون: البوت اتصل، و `bot.user` جاهز |
-| `"message"` | `msg` (رسالة، حتى رسايل البوتات) |
-| أي اسم من [أحداث ديسكورد](https://discord.com/developers/docs/topics/gateway-events) | `d` (قاموس فيه بيانات الحدث كما هي) |
+| الحدث | يوصلك | يحتاج |
+|---|---|---|
+| `"ready"` | بدون: البوت اتصل، و `bot.user` جاهز | |
+| `"message"` | `msg` (حتى رسايل البوتات) | |
+| `"message_edit"` | `msg` بعد التعديل | |
+| `"message_delete"` | `msg` فيه `id` و `channel_id` بس | |
+| `"member_join"` | `Member` | `GUILD_MEMBERS` |
+| `"member_leave"` | `Member` (فيه `id` و `name`) | `GUILD_MEMBERS` |
+| `"member_update"` | `Member` (تغيرت رتبه أو اسمه) | `GUILD_MEMBERS` |
+| `"reaction_add"` ، `"reaction_remove"` | `Reaction` | |
+| `"guild_join"` ، `"guild_leave"` | `Guild` (البوت دخل / طلع من سيرفر) | |
+| `"channel_create"` ، `"channel_delete"` | `Channel` | |
+| أي اسم من [أحداث ديسكورد](https://discord.com/developers/docs/topics/gateway-events) | `d` (قاموس كما هو) | |
 
 ## الأوامر
 
@@ -100,6 +112,11 @@ bot.command "say", lambda msg, args {
 | `msg.content` | النص |
 | `msg.author` | المرسل: `msg.author.name` و `msg.author.display_name` و `msg.author.id` و `msg.author.bot` |
 | `msg.id` ، `msg.channel_id` ، `msg.guild_id` | الأرقام (نصوص). `guild_id` فاضي في الخاص |
+| `msg.member` | المرسل كـ `Member` (رتبه واسمه في السيرفر). `none` في الخاص |
+| `msg.guild` | السيرفر كـ `Guild`. `none` في الخاص |
+| `msg.channel` | القناة كـ `Channel` |
+| `msg.mentions` | قائمة `User` للناس اللي انمنشنوا |
+| `msg.is_dm` | `true` لو الرسالة في الخاص |
 | `msg.raw` | كل بيانات الرسالة من ديسكورد كقاموس |
 
 | الـ method | وش تسوي |
@@ -126,6 +143,9 @@ bot.command "say", lambda msg, args {
 | `bot.slash name, description, f` | أمر سلاش (تحت) |
 | `bot.component id, f` | زر دايم (تحت) |
 | `bot.guild_id` | سيرفر التجربة لأوامر السلاش |
+| `bot.dm user, x` | رسالة خاص |
+| `bot.guild id` ، `bot.guild_list()` ، `bot.channel id` ، `bot.fetch_user id` | سيرفر / كل السيرفرات / قناة / مستخدم |
+| `bot.playing` ... `bot.set_status` | حالة البوت (تحت) |
 | `bot.request(method, path, body)` | أي طلب لـ [Discord API](https://discord.com/developers/docs/reference)، مثل `bot.request("GET", "/users/@me", none)` |
 | `bot.run` | يشغّل البوت (ما يرجع إلا لما يوقف) |
 | `bot.stop` | يوقف البوت |
@@ -146,7 +166,144 @@ bot.send msg.channel_id, {"content": "شوف:", "embeds": [e]}
 bot.intents = discord.GUILDS + discord.GUILD_MESSAGES + discord.MESSAGE_CONTENT + discord.GUILD_MEMBERS
 ```
 
-الافتراضي: `GUILDS` و `GUILD_MESSAGES` و `DIRECT_MESSAGES` و `MESSAGE_CONTENT`. الموجودة: `GUILDS` `GUILD_MEMBERS` `GUILD_MESSAGES` `GUILD_MESSAGE_REACTIONS` `DIRECT_MESSAGES` `MESSAGE_CONTENT`. اللي فيها (Privileged) لازم تفعلها في Developer Portal.
+الافتراضي `discord.DEFAULT_INTENTS`: `GUILDS` و `GUILD_MESSAGES` و `GUILD_MESSAGE_REACTIONS` و `DIRECT_MESSAGES` و `DIRECT_MESSAGE_REACTIONS` و `MESSAGE_CONTENT`.
+
+الموجودة: `GUILDS` `GUILD_MEMBERS` `GUILD_MODERATION` `GUILD_EMOJIS` `GUILD_INVITES` `GUILD_VOICE_STATES` `GUILD_PRESENCES` `GUILD_MESSAGES` `GUILD_MESSAGE_REACTIONS` `DIRECT_MESSAGES` `DIRECT_MESSAGE_REACTIONS` `MESSAGE_CONTENT`، و `discord.ALL_INTENTS` فيها كلها.
+
+`GUILD_MEMBERS` و `GUILD_PRESENCES` و `MESSAGE_CONTENT` (Privileged) لازم تفعلها في Developer Portal.
+
+لو تبي أحداث الأعضاء (`member_join` ...): `bot.intents = discord.DEFAULT_INTENTS + discord.GUILD_MEMBERS` وفعّل **Server Members Intent** في البورتال.
+
+---
+
+## الأعضاء: `Member`
+
+```eo
+bot.command "kick", lambda msg, args {
+    if not msg.member.has_role("Admin") {
+        msg.reply "هذا الأمر للإدارة بس"
+        return
+    }
+    if len(msg.mentions) == 0 {
+        msg.reply "منشن الشخص: !kick @فلان"
+        return
+    }
+    var m = msg.guild.member(msg.mentions[0])
+    m.send "انطردت من " + msg.guild.name
+    m.kick "طرده " + msg.author.name
+    msg.reply "✅ طردت " + m.display_name
+}
+```
+
+| الحقل | وش فيه |
+|---|---|
+| `m.id` ، `m.name` | الرقم واسم المستخدم |
+| `m.display_name` | الاسم في السيرفر (اللقب لو فيه) |
+| `m.nick` | اللقب، أو `""` |
+| `m.mention` | `<@رقمه>` تحطه في رسالة |
+| `m.avatar_url` | رابط صورته |
+| `m.roles` | أرقام رتبه |
+| `m.joined_at` | متى دخل (نص ISO، تقدر `time_parse(m.joined_at)`) |
+| `m.user` | الـ `User` حقه |
+| `m.bot` | هل هو بوت |
+
+| الـ method | وش تسوي | الصلاحية |
+|---|---|---|
+| `m.send x` | رسالة على الخاص | |
+| `m.kick` / `m.kick "سبب"` | طرد | Kick Members |
+| `m.ban` / `m.ban "سبب", 1` | باند (الرقم: كم يوم من رسايله ينحذف، لين 7) | Ban Members |
+| `m.timeout 600` / `m.timeout 600, "سبب"` | تايم أوت بالثواني (لين 28 يوم) | Moderate Members |
+| `m.untimeout` | يشيل التايم أوت | Moderate Members |
+| `m.add_role r` / `m.remove_role r` | يضيف / يشيل رتبة (`Role` أو رقمها) | Manage Roles |
+| `m.has_role r` | `Role` أو رقمها أو **اسمها** | |
+| `m.role_list()` | رتبه كـ `Role` | |
+| `m.set_nick "اسم"` | يغير لقبه (`""` يرجعه) | Manage Nicknames |
+
+السبب يطلع في سجل السيرفر (Audit Log). البوت ما يقدر يطرد أو يعطي رتبة لأحد رتبته أعلى من رتبة البوت.
+
+## الخاص
+
+```eo
+msg.author.send "هلا 👋"                  # User
+member.send "رسالة"                        # Member
+bot.dm "123456789012345678", "رسالة"       # بالرقم
+```
+
+كلها تاخذ نص أو `View` أو `LayoutView` أو `Embed`. لو الشخص قافل الخاص، ترجع `none` وتطبع `User ... has DMs closed`. رسايل الخاص توصلك في `"message"` و `msg.is_dm` يكون `true`.
+
+## السيرفر: `Guild`
+
+```eo
+bot.command "server", lambda msg, args {
+    var g = msg.guild
+    var e = discord.Embed(g.name, "")
+    e.inline "الأعضاء", string(g.member_count)
+    e.inline "القنوات", string(len(g.channels))
+    e.inline "الرتب", string(len(g.roles))
+    e.thumbnail = g.icon_url
+    msg.reply e
+}
+```
+
+| | |
+|---|---|
+| `g.id` ، `g.name` ، `g.owner_id` ، `g.member_count` ، `g.icon_url` | معلوماته |
+| `g.channels` ، `g.roles` | قوائم `Channel` و `Role` (تتحدث لحالها) |
+| `g.find_channel "general"` | قناة بالاسم أو الرقم، أو `none` |
+| `g.find_role "Admin"` | رتبة بالاسم أو الرقم، أو `none` |
+| `g.member id` | `Member` من ديسكورد (`id` = رقم أو `User`) |
+| `g.members` / `g.members 500` | كل الأعضاء (يحتاج `GUILD_MEMBERS`) |
+| `g.kick user` ، `g.ban user, "سبب"` ، `g.unban user` | بدون ما تجيب `Member` |
+| `g.bans` | المبندين: `[{"user": User, "reason": "..."}]` |
+| `g.create_channel "اسم"` | قناة كتابية. `g.create_channel "صوت", discord.VOICE` صوتية |
+| `g.create_role "VIP"` / `g.create_role "VIP", 16766720` | رتبة (باللون) |
+| `g.leave` | البوت يطلع |
+
+`bot.guild "رقم"` يجيب أي سيرفر، و `bot.guild_list()` كل السيرفرات اللي فيها البوت.
+
+## القنوات والرتب
+
+| `Channel` | |
+|---|---|
+| `c.id` ، `c.name` ، `c.kind` ، `c.topic` ، `c.mention` ، `c.parent_id` | `kind`: `discord.TEXT` `VOICE` `CATEGORY` `NEWS` `STAGE` `FORUM` |
+| `c.send x` | ترسل فيها |
+| `c.history` / `c.history 100` | آخر الرسايل كـ `Message` |
+| `c.purge 20` | تحذف آخر 20 (لين 100، أحدث من 14 يوم). ترجع العدد |
+| `c.typing` | "البوت يكتب..." |
+| `c.rename "اسم"` ، `c.set_topic "نص"` ، `c.delete` | |
+
+| `Role` | |
+|---|---|
+| `r.id` ، `r.name` ، `r.color` ، `r.position` ، `r.mention` | |
+| `r.rename "اسم"` ، `r.delete` | |
+
+`bot.channel "رقم"` يرجع `Channel`.
+
+## الرياكشنات: `Reaction`
+
+```eo
+# رتب بالرياكشن
+const MESSAGE_ID = "رقم_رسالة_الرتب"
+bot.on "reaction_add", lambda r {
+    if r.message_id == MESSAGE_ID and r.emoji == "⭐" {
+        r.member.add_role bot.guild(r.guild_id).find_role("VIP")
+    }
+}
+```
+
+`r.emoji` (`"⭐"` أو `"اسم:رقم"`)، `r.user_id`، `r.member` (في السيرفرات)، `r.message_id`، `r.channel_id`، `r.guild_id`. و `r.user()` يجيب الـ `User`، و `r.remove` يشيل رياكشنه.
+
+## حالة البوت
+
+```eo
+bot.playing "eo"          # Playing eo
+bot.watching "السيرفر"    # Watching السيرفر
+bot.listening "قرآن"
+bot.competing "بطولة"
+bot.set_status "idle"     # online / idle / dnd / invisible
+```
+
+تحطها قبل `bot.run` أو في أي وقت بعده.
 
 ---
 
@@ -225,6 +382,7 @@ bot.command "card", lambda msg, args {
 | الحقل | وش فيه |
 |---|---|
 | `i.user` | اللي ضغط (User) |
+| `i.member` ، `i.guild` | اللي ضغط كـ Member، والسيرفر (في السيرفرات) |
 | `i.message` | الرسالة اللي فيها الزر (Message) |
 | `i.values` | اللي اختاره من القائمة |
 | `i.fields` | اللي كتبه في النموذج |
@@ -340,6 +498,7 @@ msg.reply e
 ```bash
 node tests/run.js path\to\eo.exe
 node tests/run_ui.js path\to\eo.exe
+node tests/run_guild.js path\to\eo.exe
 ```
 ```
 sent to Discord: [ 'pong', 'hello world', 'reaction', 'pong', 'embed:Bye' ]

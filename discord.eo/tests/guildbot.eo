@@ -1,0 +1,67 @@
+import discord
+var bot = discord.Bot("good")
+bot.api = "http://127.0.0.1:8792/api/v10"
+bot.gateway = "ws://127.0.0.1:8792/?v=10&encoding=json"
+bot.intents = discord.ALL_INTENTS
+bot.playing "eo"
+
+bot.on "guild_join", lambda g {
+    print "guild_join", g.name, len(g.channels), len(g.roles), g.icon_url
+}
+bot.on "guild_leave", lambda g { print "guild_leave", g.name }
+
+bot.command "info", lambda msg, args {
+    var g = msg.guild
+    print "info", g.name, g.member_count, msg.member.display_name, msg.member.has_role("Admin"), msg.member.has_role("VIP"), msg.channel.name, msg.author.avatar_url
+    print "roles", join(map(msg.member.role_list(), lambda r { r.name }), ",")
+    msg.reply g.name
+}
+bot.command "kick", lambda msg, args {
+    var m = msg.guild.member(msg.mentions[0].id)
+    print "kick", m.display_name, m.avatar_url, m.roles
+    m.kick "سبام"
+}
+bot.command "ban", lambda msg, args {
+    msg.guild.ban msg.mentions[0], "سبب", 1
+}
+bot.command "mute", lambda msg, args {
+    var m = msg.guild.member(msg.mentions[0])
+    m.timeout 600
+    print "mute until starts 20:", startswith(m.timed_out_until, "20")
+}
+bot.command "role", lambda msg, args {
+    var r = msg.guild.find_role("vip")
+    msg.member.add_role r
+    print "has vip now:", msg.member.has_role(r)
+    msg.member.remove_role "r1", "تجربة"
+}
+bot.command "dm", lambda msg, args {
+    msg.author.send "هلا بالخاص"
+    bot.dm msg.author, "ثانية"
+}
+bot.command "purge", lambda msg, args {
+    print "purged", msg.channel.purge(3)
+}
+bot.command "status", lambda msg, args {
+    bot.set_status "dnd"
+    bot.watching "السيرفر"
+}
+bot.on "member_join", lambda m {
+    print "member_join", m.display_name, m.guild_id, bot.guild("g1").member_count
+    m.send "حياك " + m.mention
+    m.add_role "r2"
+}
+bot.on "member_leave", lambda m { print "member_leave", m.name }
+bot.on "reaction_add", lambda r { print "reaction_add", r.emoji, r.member.display_name, r.message_id }
+bot.on "message_edit", lambda msg { print "message_edit", msg.content }
+bot.on "message_delete", lambda msg { print "message_delete", msg.id }
+bot.slash "whoami", "مين أنا", lambda i {
+    i.reply i.member.display_name + " @ " + i.guild.name + " perms=" + i.member.permissions
+}
+bot.command "check", lambda msg, args {
+    var g = msg.guild
+    print "cache", len(g.roles), len(g.channels), g.find_channel("news").mention, g.find_role("new").mention, len(bot.guild_list())
+}
+bot.command "stop", lambda msg, args { bot.stop }
+bot.run
+print "ended"

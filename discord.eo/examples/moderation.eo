@@ -1,0 +1,153 @@
+# بوت إدارة: طرد، باند، تايم أوت، رتب، ترحيب بالخاص، رتب بالرياكشن
+import discord
+
+load_env()
+var bot = discord.Bot(env("DISCORD_TOKEN"))
+# أحداث الأعضاء تحتاج Server Members Intent (فعّلها في Developer Portal > Bot)
+bot.intents = discord.DEFAULT_INTENTS + discord.GUILD_MEMBERS
+bot.watching "السيرفر 👀"
+
+const ADMIN_ROLE = "Admin"          # اسم رتبة الإدارة
+const WELCOME_ROLE = "Member"       # الرتبة اللي تنعطى لكل واحد يدخل
+const ROLES_MESSAGE = ""            # رقم رسالة الرتب بالرياكشن
+
+func is_admin msg {
+    if msg.member == none or not msg.member.has_role(ADMIN_ROLE) {
+        msg.reply "هذا الأمر للإدارة بس"
+        return false
+    }
+    return true
+}
+
+# يجيب أول شخص انمنشن كـ Member
+func target msg {
+    if len(msg.mentions) == 0 {
+        msg.reply "منشن الشخص"
+        return none
+    }
+    return msg.guild.member(msg.mentions[0])
+}
+
+# !kick @فلان السبب
+bot.command "kick", lambda msg, args {
+    if not is_admin(msg) {
+        return
+    }
+    var m = target(msg)
+    if m == none {
+        return
+    }
+    var reason = join(slice(args, 1), " ")
+    m.send "انطردت من **" + msg.guild.name + "**. السبب: " + reason
+    m.kick reason
+    msg.reply "👢 طردت " + m.display_name
+}
+
+# !ban @فلان السبب
+bot.command "ban", lambda msg, args {
+    if not is_admin(msg) {
+        return
+    }
+    var m = target(msg)
+    if m == none {
+        return
+    }
+    m.ban join(slice(args, 1), " "), 1
+    msg.reply "🔨 بندت " + m.display_name
+}
+
+# !mute @فلان 10   (دقايق)
+bot.command "mute", lambda msg, args {
+    if not is_admin(msg) {
+        return
+    }
+    var m = target(msg)
+    if m == none {
+        return
+    }
+    var minutes = 10
+    if len(args) > 1 {
+        minutes = int(args[1])
+    }
+    m.timeout minutes * 60, "mute by " + msg.author.name
+    msg.reply "🔇 " + m.display_name + " ساكت " + string(minutes) + " دقيقة"
+}
+
+bot.command "unmute", lambda msg, args {
+    if not is_admin(msg) {
+        return
+    }
+    var m = target(msg)
+    if m != none {
+        m.untimeout
+        msg.reply "🔊 " + m.display_name
+    }
+}
+
+# !clear 20
+bot.command "clear", lambda msg, args {
+    if not is_admin(msg) {
+        return
+    }
+    var n = 10
+    if len(args) > 0 {
+        n = int(args[0])
+    }
+    var done = msg.channel.purge(n + 1)
+    msg.channel.send "🧹 انحذفت " + string(done - 1) + " رسالة"
+}
+
+# !user @فلان
+bot.command "user", lambda msg, args {
+    var m = msg.member
+    if len(msg.mentions) > 0 {
+        m = msg.guild.member(msg.mentions[0])
+    }
+    var e = discord.Embed(m.display_name, m.mention)
+    e.thumbnail = m.avatar_url
+    e.inline "الرقم", m.id
+    e.inline "دخل", slice(m.joined_at, 0, 10)
+    var roles = join(map(m.role_list(), lambda r { r.mention }), " ")
+    if roles == "" {
+        roles = "ما عنده رتب"
+    }
+    e.field "الرتب", roles
+    msg.reply e
+}
+
+# !server
+bot.command "server", lambda msg, args {
+    var g = msg.guild
+    var e = discord.Embed(g.name, "")
+    e.thumbnail = g.icon_url
+    e.inline "الأعضاء", string(g.member_count)
+    e.inline "القنوات", string(len(g.channels))
+    e.inline "الرتب", string(len(g.roles))
+    e.inline "المالك", "<@" + g.owner_id + ">"
+    msg.reply e
+}
+
+# ترحيب على الخاص + رتبة
+bot.on "member_join", lambda m {
+    m.send "حياك الله في السيرفر " + m.mention + " 🎉"
+    var r = bot.guild(m.guild_id).find_role(WELCOME_ROLE)
+    if r != none {
+        m.add_role r
+    }
+}
+
+bot.on "member_leave", lambda m {
+    print m.name + " طلع"
+}
+
+# رتب بالرياكشن: ⭐ = VIP
+bot.on "reaction_add", lambda r {
+    if r.message_id == ROLES_MESSAGE and r.emoji == "⭐" and r.member != none {
+        var vip = bot.guild(r.guild_id).find_role("VIP")
+        if vip != none {
+            r.member.add_role vip
+        }
+    }
+}
+
+bot.run
