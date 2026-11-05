@@ -1,0 +1,44 @@
+# بوت ديسكورد بلغة eo
+# التشغيل:  حط DISCORD_TOKEN=... في ملف .env جنب الملف، وبعدها:  eo bot.eo
+import discord
+
+load_env()
+var bot = discord.Bot(env("DISCORD_TOKEN"))
+bot.prefix = "!"
+
+bot.on "ready", lambda {
+    print "Bot is online as " + bot.user.name
+}
+
+# !ping
+bot.command "ping", lambda msg, args {
+    msg.reply "pong 🏓"
+}
+
+# !say أي كلام
+bot.command "say", lambda msg, args {
+    if len(args) == 0 {
+        msg.reply "اكتب شي بعد !say"
+    } else {
+        msg.send join(args, " ")
+    }
+}
+
+# !info
+bot.command "info", lambda msg, args {
+    msg.reply_embed "eo", "هذا البوت مكتوب بلغة eo 🔥"
+}
+
+# أي رسالة
+bot.on "message", lambda msg {
+    if msg.content == "سلام" {
+        msg.react "👋"
+    }
+}
+
+# عضو جديد دخل السيرفر (يحتاج GUILD_MEMBERS في الـ intents)
+bot.on "GUILD_MEMBER_ADD", lambda d {
+    print "New member: " + d["user"]["username"]
+}
+
+bot.run

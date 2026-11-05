@@ -1,0 +1,40 @@
+import discord
+
+var bot = discord.Bot("good")
+bot.api = "http://127.0.0.1:8790/api/v10"
+bot.gateway = "ws://127.0.0.1:8790/gateway?v=10&encoding=json"
+
+bot.on "ready", lambda {
+    print "READY as", bot.user.name, bot.user.display_name
+}
+
+bot.command "ping", lambda msg, args {
+    msg.reply "pong"
+}
+
+bot.command "say", lambda msg, args {
+    msg.reply join(args, " ")
+}
+
+bot.command "boom", lambda msg, args {
+    var x = 1 / 0
+}
+
+bot.command "stop", lambda msg, args {
+    msg.reply_embed "Bye", "stopping"
+    bot.stop
+}
+
+bot.on "message", lambda msg {
+    print "msg from", msg.author.name, ":", msg.content
+    if msg.content == "hi" {
+        msg.react "👋"
+    }
+}
+
+bot.on "GUILD_MEMBER_ADD", lambda d {
+    print "member joined:", d["user"]["username"]
+}
+
+bot.run
+print "bot ended"

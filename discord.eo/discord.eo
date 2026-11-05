@@ -1,0 +1,371 @@
+# discord.eo — مكتبة بوتات ديسكورد للغة eo
+#
+#   import discord
+#   load_env()
+#   var bot = discord.Bot(env("DISCORD_TOKEN"))
+#   bot.command "ping", lambda msg, args {
+#       msg.reply "pong"
+#   }
+#   bot.run
+#
+# كل حدث يشتغل داخل prc: لو كودك طلع فيه خطأ أو علّق، يطبع الخطأ والبوت يكمل.
+
+const VERSION = "1.0.0"
+const API = "https://discord.com/api/v10"
+const GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
+
+# Intents: وش الأحداث اللي يبيها البوت (اجمعها: discord.GUILDS + discord.GUILD_MESSAGES)
+const GUILDS = 1
+const GUILD_MEMBERS = 2
+const GUILD_MESSAGES = 512
+const GUILD_MESSAGE_REACTIONS = 1024
+const DIRECT_MESSAGES = 4096
+const MESSAGE_CONTENT = 32768
+const DEFAULT_INTENTS = 37377
+
+const COLOR = 16281969
+
+# مستخدم ديسكورد
+struct User {
+    id @string
+    name @string
+    display_name @string
+    bot @bool
+    raw @map
+}
+
+# رسالة وصلت للبوت
+struct Message {
+    id @string
+    content @string
+    channel_id @string
+    guild_id @string
+    author @User
+    bot
+    raw @map
+}
+
+# البوت نفسه
+struct Bot {
+    token
+    prefix @string = "!"
+    intents @int = DEFAULT_INTENTS
+    api @string = API
+    gateway @string = GATEWAY
+    log @bool = true
+    user
+    handlers @map
+    commands @map
+    session_id @string
+    resume_url @string
+    seq
+    ws
+    running @bool = false
+}
+
+# ═════ تسجيل الأحداث والأوامر ═════
+
+# bot.on "ready", lambda { ... }     bot.on "message", lambda msg { ... }
+# أو أي حدث من ديسكورد بالاسم: bot.on "GUILD_MEMBER_ADD", lambda data { ... }
+func Bot.on event @string, f @lambda {
+    var key = event
+    if lower(event) == "ready" or lower(event) == "message" {
+        key = lower(event)
+    }
+    if not has(self.handlers, key) {
+        self.handlers[key] = []
+    }
+    append self.handlers[key], f
+}
+
+# bot.command "ping", lambda msg, args { ... }   → يشتغل لما أحد يكتب !ping
+func Bot.command name @string, f @lambda {
+    self.commands[lower(name)] = f
+}
+
+# ═════ إرسال ═════
+
+# bot.send channel_id, "نص"   أو   bot.send channel_id, {"content": "...", "embeds": [...]}
+func Bot.send channel_id @string, content {
+    return self.request("POST", "/channels/" + channel_id + "/messages", message_body(content))
+}
+
+# msg.reply "pong"   (رد على الرسالة نفسها)
+func Message.reply content {
+    var body = message_body(content)
+    body["message_reference"] = {"message_id": self.id}
+    body["allowed_mentions"] = {"replied_user": false}
+    return self.bot.request("POST", "/channels/" + self.channel_id + "/messages", body)
+}
+
+# msg.send "نص"   (رسالة عادية في نفس القناة)
+func Message.send content {
+    return self.bot.send(self.channel_id, content)
+}
+
+# msg.react "👍"
+func Message.react emoji @string {
+    return self.bot.request("PUT", "/channels/" + self.channel_id + "/messages/" + self.id + "/reactions/" + url_encode(emoji) + "/@me", none)
+}
+
+# msg.delete
+func Message.delete {
+    return self.bot.request("DELETE", "/channels/" + self.channel_id + "/messages/" + self.id, none)
+}
+
+# msg.reply_embed "العنوان", "النص"
+func Message.reply_embed title @string, text @string {
+    return self.reply({"embeds": [embed(title, text)]})
+}
+
+# discord.embed("العنوان", "النص")  → صندوق مرتب تحطه في {"embeds": [...]}
+func embed title @string, text @string {
+    return {"title": title, "description": text, "color": COLOR}
+}
+
+func message_body content {
+    if type(content) == "map" {
+        return content
+    }
+    return {"content": string(content)}
+}
+
+# أي طلب لـ Discord API:  bot.request("GET", "/users/@me", none)
+func Bot.request method @string, path @string, body {
+    var headers = {"Authorization": "Bot " + self.token, "User-Agent": "DiscordBot (https://eolang.netlify.app, " + VERSION + ")"}
+    var tries = 0
+    while true {
+        var r = http(method, self.api + path, body, headers)
+        if r["status"] == 429 and tries < 5 {
+            var wait = 1
+            if r["json"] != none {
+                wait = get(r["json"], "retry_after", 1)
+            }
+            self._log "Rate limited, waiting " + string(wait) + "s"
+            sleep wait
+            tries += 1
+            continue
+        }
+        if r["status"] == 0 {
+            self._log "Could not reach Discord: " + r["error"]
+        } elif r["status"] >= 400 {
+            self._log "Discord said " + string(r["status"]) + " to " + method + " " + path + ": " + r["body"]
+        }
+        return r["json"]
+    }
+}
+
+# ═════ التشغيل ═════
+
+func Bot.run {
+    if self.token == none or self.token == "" {
+        print "[discord] No token. Put DISCORD_TOKEN=... in a .env file next to your bot, then: load_env()"
+        exit 1
+    }
+    self.running = true
+    var resume = false
+    var fails = 0
+    while self.running {
+        var url = self.gateway
+        if resume and self.resume_url != "" {
+            url = self.resume_url
+        }
+        var code = self._connect(url, resume)
+        if not self.running {
+            break
+        }
+        if code == -1 {
+            fails += 1
+            var wait = fails * 5
+            if wait > 60 {
+                wait = 60
+            }
+            self._log "Can't connect (" + ws_error() + "), trying again in " + string(wait) + "s"
+            sleep wait
+            continue
+        }
+        fails = 0
+        if code == 4004 {
+            self._log "The token is wrong. Copy it again from the Developer Portal (Bot > Reset Token)."
+            return
+        }
+        if code == 4013 or code == 4014 {
+            self._log "Discord refused the intents. Turn on 'Message Content Intent' (and the others you use) in Developer Portal > Bot > Privileged Gateway Intents."
+            return
+        }
+        if code == 4010 or code == 4011 or code == 4012 {
+            self._log "Discord closed the connection for good (code " + string(code) + ")."
+            return
+        }
+        resume = self.session_id != "" and code != 4007 and code != 4009
+        if not resume {
+            self.session_id = ""
+            self.seq = none
+        }
+        self._log "Disconnected (code " + string(code) + "), reconnecting..."
+        sleep 1
+    }
+}
+
+# bot.stop   (يوقف البوت من داخل أي حدث)
+func Bot.stop {
+    self.running = false
+    if self.ws != none {
+        ws_close self.ws
+        self.ws = none
+    }
+}
+
+# اتصال واحد بالـ gateway، ويرجع كود الإغلاق (-1 = ما قدر يتصل)
+func Bot._connect url @string, resume @bool {
+    var ws = ws_connect(url)
+    if ws == none {
+        return -1
+    }
+    self.ws = ws
+    var beat = 41.25
+    var next_beat = now() + 3600
+    var acked = true
+    while self.running {
+        var wait = next_beat - now()
+        if wait < 0 {
+            wait = 0
+        }
+        var ev = ws_recv(ws, wait)
+        if ev["type"] == "closed" {
+            self.ws = none
+            return ev["code"]
+        }
+        if ev["type"] == "timeout" {
+            if not acked {
+                ws_close ws, 4000
+                self.ws = none
+                return 4000
+            }
+            ws_send ws, {"op": 1, "d": self.seq}
+            acked = false
+            next_beat = now() + beat
+            continue
+        }
+        var p = json_decode(ev["data"])
+        if get(p, "s", none) != none {
+            self.seq = p["s"]
+        }
+        var op = get(p, "op", -1)
+        if op == 0 {
+            self._dispatch(text_of(p, "t"), get(p, "d", none))
+        } elif op == 10 {
+            beat = p["d"]["heartbeat_interval"] / 1000.0
+            next_beat = now() + beat * random()
+            if resume {
+                ws_send ws, {"op": 6, "d": {"token": self.token, "session_id": self.session_id, "seq": self.seq}}
+            } else {
+                ws_send ws, {"op": 2, "d": {"token": self.token, "intents": self.intents, "properties": {"os": "windows", "browser": "eo", "device": "eo"}}}
+            }
+        } elif op == 11 {
+            acked = true
+        } elif op == 1 {
+            ws_send ws, {"op": 1, "d": self.seq}
+        } elif op == 7 {
+            ws_close ws, 4000
+            self.ws = none
+            return 4000
+        } elif op == 9 {
+            if get(p, "d", false) != true {
+                self.session_id = ""
+                self.seq = none
+            }
+            sleep 1 + random() * 4
+            ws_close ws, 4000
+            self.ws = none
+            return 4000
+        }
+    }
+    return 1000
+}
+
+func Bot._dispatch t @string, d {
+    if t == "READY" {
+        self.session_id = text_of(d, "session_id")
+        self.resume_url = text_of(d, "resume_gateway_url") + "/?v=10&encoding=json"
+        self.user = make_user(d["user"])
+        self._log "Online as " + self.user.name
+        self._emit("ready", [])
+    } elif t == "RESUMED" {
+        self._log "Reconnected"
+    } elif t == "MESSAGE_CREATE" {
+        var msg = make_message(self, d)
+        self._emit("message", [msg])
+        if not msg.author.bot {
+            self._command(msg)
+        }
+    }
+    self._emit(t, [d])
+}
+
+# ينادي كل اللي مسجلين على الحدث، كل واحد داخل prc (حد دقيقة)
+func Bot._emit key @string, args @list {
+    if not has(self.handlers, key) {
+        return
+    }
+    for f in self.handlers[key] {
+        prc -s 60 {
+            if len(args) == 0 {
+                f()
+            } else {
+                f(args[0])
+            }
+        }
+    }
+}
+
+func Bot._command msg @Message {
+    if self.prefix == "" or not startswith(msg.content, self.prefix) {
+        return
+    }
+    var words = filter(split(trim(msg.content), " "), lambda w { w != "" })
+    if len(words) == 0 {
+        return
+    }
+    var name = lower(slice(words[0], len(self.prefix)))
+    if not has(self.commands, name) {
+        return
+    }
+    var f = self.commands[name]
+    var args = slice(words, 1)
+    prc -s 60 {
+        f(msg, args)
+    }
+}
+
+func Bot._log text @string {
+    if self.log {
+        print "[discord] " + text
+    }
+}
+
+# ═════ تحويل بيانات ديسكورد ═════
+
+func text_of m, key @string {
+    if m == none or not has(m, key) {
+        return ""
+    }
+    var v = m[key]
+    if v == none {
+        return ""
+    }
+    return string(v)
+}
+
+func make_user d {
+    var name = text_of(d, "username")
+    var shown = text_of(d, "global_name")
+    if shown == "" {
+        shown = name
+    }
+    return User{id: text_of(d, "id"), name: name, display_name: shown, bot: get(d, "bot", false) == true, raw: d}
+}
+
+func make_message b @Bot, d {
+    return Message{id: text_of(d, "id"), content: text_of(d, "content"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), author: make_user(d["author"]), bot: b, raw: d}
+}
