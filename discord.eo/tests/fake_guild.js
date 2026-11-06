@@ -32,13 +32,30 @@ const script = [
   () => dispatch('CHANNEL_CREATE', { id: 'c3', name: 'news', type: 0, guild_id: 'g1' }),
   () => dispatch('INTERACTION_CREATE', { id: 'i1', token: 't1', type: 2, data: { name: 'whoami' }, guild_id: 'g1', channel_id: 'c1', member: { ...member(ali, ['r1'], 'Boss'), permissions: '8' } }),
   () => dispatch('MESSAGE_CREATE', msg('m9', '!check')),
+  () => dispatch('MESSAGE_CREATE', msg('m11', '!embeds')),
+  () => dispatch('MESSAGE_CREATE', msg('m12', '!file')),
+  () => dispatch('MESSAGE_CREATE', msg('m13', '!p')),
+  () => dispatch('INTERACTION_CREATE', { id: 'i2', token: 't2', type: 2, data: { name: 'secret' }, guild_id: 'g1', channel_id: 'c1', member: member(ali, [], null) }),
   () => dispatch('GUILD_DELETE', { id: 'g2' }),
   () => dispatch('MESSAGE_CREATE', msg('m10', '!stop')),
 ];
 const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', d => body += d); req.on('end', () => {
-    const u = decodeURIComponent(req.url);
-    rest.push({ method: req.method, path: u, reason: req.headers['x-audit-log-reason'] ? decodeURIComponent(req.headers['x-audit-log-reason']) : undefined, body: body ? JSON.parse(body) : null }); save();
+  const chunks = []; req.on('data', d => chunks.push(d)); req.on('end', () => {
+    const raw = Buffer.concat(chunks), u = decodeURIComponent(req.url), ct = req.headers['content-type'] || '';
+    let body = raw.length ? raw.toString() : '';
+    let parsed = null;
+    if (ct.startsWith('multipart/form-data')) {
+      // parse the two parts: payload_json + files[0] (bytes kept exact)
+      const boundary = '--' + ct.split('boundary=')[1];
+      const parts = []; let at = raw.indexOf(boundary);
+      while (at >= 0) { const next = raw.indexOf(boundary, at + boundary.length); if (next < 0) break; parts.push(raw.slice(at + boundary.length + 2, next - 2)); at = next; }
+      parsed = { multipart: true };
+      for (const p of parts) { const h = p.indexOf('\r\n\r\n'), head = p.slice(0, h).toString(), data = p.slice(h + 4);
+        if (head.includes('name="payload_json"')) parsed.payload = JSON.parse(data.toString());
+        else { parsed.filename = (head.match(/filename="([^"]+)"/) || [])[1]; parsed.size = data.length; parsed.sha = crypto.createHash('sha1').update(data).digest('hex').slice(0, 8); } }
+      body = 'multipart';
+    } else if (body) parsed = JSON.parse(body);
+    rest.push({ method: req.method, path: u, reason: req.headers['x-audit-log-reason'] ? decodeURIComponent(req.headers['x-audit-log-reason']) : undefined, body: parsed }); save();
     const json = (o, code) => { res.writeHead(code || 200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
     if (req.method === 'GET' && u.startsWith('/api/v10/guilds/g1/members/' + sara.id)) return json(member(sara, ['r2']));
     if (req.method === 'GET' && u.startsWith('/api/v10/channels/c1/messages')) return json([msg('x1', 'a'), msg('x2', 'b'), msg('x3', 'c')]);

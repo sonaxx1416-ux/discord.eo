@@ -18,11 +18,20 @@ setTimeout(() => {
     setTimeout(() => {
       let log = { rest: [], gw: [] }; try { log = JSON.parse(fs.readFileSync(out, 'utf8')); } catch (e) {}
       const calls = log.rest.map(r => r.method + ' ' + r.path.replace('/api/v10', '').replace(/\d{18}/g, 'U').replace(/dm\d+/, 'DM') + (r.reason ? ' [' + r.reason + ']' : ''));
-      const want = ['PUT /applications/app1/commands', 'POST /channels/c1/messages', 'GET /guilds/g1/members/U', 'DELETE /guilds/g1/members/U [سبام]', 'PUT /guilds/g1/bans/U [سبب]', 'GET /guilds/g1/members/U', 'PATCH /guilds/g1/members/U', 'PUT /guilds/g1/members/U/roles/r2', 'DELETE /guilds/g1/members/U/roles/r1 [تجربة]', 'POST /users/@me/channels', 'POST /channels/DM/messages', 'POST /channels/DM/messages', 'GET /channels/c1/messages?limit=3', 'POST /channels/c1/messages/bulk-delete', 'POST /users/@me/channels', 'POST /channels/DM/messages', 'PUT /guilds/g1/members/U/roles/r2', 'POST /interactions/i1/t1/callback'];
-      const lines = ['guild_join new server 2 3', 'info eo server 10 Boss true false general', 'roles Admin', 'kick sara https://cdn.discordapp.com/embed/avatars/3.png', 'mute until starts 20: true', 'has vip now: true', 'purged 3', 'member_join sara g1 11', 'member_leave sara', 'reaction_add ⭐ Boss m1', 'message_edit !info edited', 'message_delete m1', 'cache 4 3 <#c3> <@&r3> 2', 'guild_leave new server', 'ended'];
+      const want = ['PUT /applications/app1/commands', 'POST /channels/c1/messages', 'GET /guilds/g1/members/U', 'DELETE /guilds/g1/members/U [سبام]', 'PUT /guilds/g1/bans/U [سبب]', 'GET /guilds/g1/members/U', 'PATCH /guilds/g1/members/U', 'PUT /guilds/g1/members/U/roles/r2', 'DELETE /guilds/g1/members/U/roles/r1 [تجربة]', 'POST /users/@me/channels', 'POST /channels/DM/messages', 'POST /channels/DM/messages', 'GET /channels/c1/messages?limit=3', 'POST /channels/c1/messages/bulk-delete', 'POST /users/@me/channels', 'POST /channels/DM/messages', 'PUT /guilds/g1/members/U/roles/r2', 'POST /interactions/i1/t1/callback',
+        'POST /channels/c1/messages', 'POST /channels/c1/messages', 'POST /channels/c1/messages', 'POST /channels/c1/messages', 'POST /channels/DM/messages', 'POST /channels/DM/messages',
+        'POST /channels/c1/messages', 'POST /channels/c1/messages', 'POST /channels/DM/messages',
+        'PUT /channels/c1/messages/m13/reactions/1️⃣/@me', 'PUT /channels/c1/messages/m13/reactions/2️⃣/@me', 'POST /interactions/i2/t2/callback'];
+      const lines = ['guild_join new server 2 3', 'info eo server 10 Boss true false general', 'roles Admin', 'kick sara https://cdn.discordapp.com/embed/avatars/3.png', 'mute until starts 20: true', 'has vip now: true', 'purged 3', 'member_join sara g1 11', 'member_leave sara', 'reaction_add ⭐ Boss m1', 'message_edit !info edited', 'message_delete m1', 'cache 4 3 <#c3> <@&r3> 2', 'guild_leave new server', 'file exists true true', 'ended'];
+      const bodies = log.rest.map(r => r.body || {});
+      const colors = bodies.filter(b => b.embeds).map(b => b.embeds[0].color).join(',');
+      const files = bodies.filter(b => b.multipart).map(b => b.filename + ':' + b.size).join(',');
+      const hidden = (bodies.find(b => b.type === 4 && b.data && b.data.flags === 64) || {}).data;
+      const extrasOK = colors === '16281969,5763719,16281969,16705372,16281969,15548997' && files === 'tmp_upload.png:203,tmp_upload.png:203,tmp_upload.png:203' && hidden && hidden.embeds[0].color === 10181046;
+      if (!extrasOK) console.log('extras:', colors, files, hidden);
       const presence = log.gw.filter(g => g.op === 3).map(g => g.d.status + ':' + (g.d.activities[0] || {}).name);
       const missing = lines.filter(l => !printed.includes(l));
-      const ok = code === 0 && JSON.stringify(calls) === JSON.stringify(want) && missing.length === 0 && log.gw.find(g => g.op === 2).d.presence.activities[0].name === 'eo' && presence.join() === 'dnd:eo,dnd:السيرفر';
+      const ok = extrasOK && code === 0 && JSON.stringify(calls) === JSON.stringify(want) && missing.length === 0 && log.gw.find(g => g.op === 2).d.presence.activities[0].name === 'eo' && presence.join() === 'dnd:eo,dnd:السيرفر';
       if (!ok) { console.log('calls:', calls); console.log('missing output:', missing); console.log('presence:', presence); }
       console.log(ok ? 'PASS' : 'FAIL');
       try { fs.unlinkSync(path.join(here, 'discord.eo')); fs.unlinkSync(out); } catch (e) {}

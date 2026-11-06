@@ -62,6 +62,33 @@ bot.command "check", lambda msg, args {
     var g = msg.guild
     print "cache", len(g.roles), len(g.channels), g.find_channel("news").mention, g.find_role("new").mention, len(bot.guild_list())
 }
+bot.command "embeds", lambda msg, args {
+    msg.send_embed "1", "msg"
+    msg.reply_embed "2", "reply", discord.GREEN
+    bot.send_embed msg.channel_id, "3"
+    msg.channel.send_embed "4", "", discord.color("#FEE75C")
+    msg.author.send_embed "5", "dm user"
+    msg.member.send_embed "6", "dm member", discord.RED
+}
+bot.command "file", lambda msg, args {
+    var bytes = "PNG"
+    for k in range(200) {
+        bytes = bytes + string(k % 10)
+    }
+    write_file "tmp_upload.png", bytes
+    msg.send_file "tmp_upload.png"
+    var e = discord.Embed("صورة", "")
+    e.image = "attachment://tmp_upload.png"
+    msg.channel.send_file "tmp_upload.png", e
+    msg.author.send_file "tmp_upload.png", "خذ"
+    print "file exists", file_exists("tmp_upload.png"), delete_file("tmp_upload.png")
+}
+bot.command ["ping", "p"], lambda msg, args {
+    msg.react ["1️⃣", "2️⃣"]
+}
+bot.slash "secret", "مخفي", lambda i {
+    i.reply_embed "سر", "بس أنت تشوفه", discord.PURPLE, true
+}
 bot.command "stop", lambda msg, args { bot.stop }
 bot.run
 print "ended"

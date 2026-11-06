@@ -27,7 +27,7 @@ eo get https://github.com/USER/discord.eo
 
 ينزل `discord.eo` جنب ملفاتك، وتستخدمه بـ `import discord`. أو انسخ `discord.eo` يدويًا جنب ملف البوت.
 
-> تحتاج `eo.exe` الجديد (فيه القيم الافتراضية للدوال و `time_iso`).
+> تحتاج `eo.exe` الجديد (فيه القيم الافتراضية للدوال و `time_iso` و `read_file` و `save_json`).
 
 ## تجهيز البوت في ديسكورد
 
@@ -103,6 +103,7 @@ bot.command "say", lambda msg, args {
 ```
 
 - اسم الأمر ما يفرق فيه الحرف الكبير والصغير (`!PING` = `!ping`).
+- أكثر من اسم لنفس الأمر: `bot.command ["ping", "p"], lambda msg, args { ... }`.
 - الأوامر ما تشتغل على رسايل البوتات (ولا على البوت نفسه).
 
 ## الرسالة `msg`
@@ -123,8 +124,10 @@ bot.command "say", lambda msg, args {
 |---|---|
 | `msg.reply "نص"` | ترد على الرسالة |
 | `msg.send "نص"` | ترسل رسالة عادية في نفس القناة |
-| `msg.react "👍"` | تحط رياكشن |
-| `msg.reply_embed "العنوان", "النص"` | ترد بصندوق مرتب |
+| `msg.react "👍"` | تحط رياكشن، أو كذا وحدة: `msg.react ["1️⃣", "2️⃣"]` |
+| `msg.send_embed "عنوان", "نص"` | Embed في نفس القناة (اللون اختياري) |
+| `msg.send_file "صورة.png"` | ملف في نفس القناة |
+| `msg.reply_embed "العنوان", "النص"` | ترد بصندوق مرتب (واللون اختياري: `, discord.GREEN`) |
 | `msg.edit "نص"` | تعدل رسالة أرسلها البوت |
 | `msg.delete` | تحذف الرسالة (تحتاج صلاحية Manage Messages) |
 
@@ -304,6 +307,65 @@ bot.set_status "idle"     # online / idle / dnd / invisible
 ```
 
 تحطها قبل `bot.run` أو في أي وقت بعده.
+
+---
+
+## اختصارات الإرسال
+
+كل شي تقدر ترسل له، فيه `send` و `send_embed` و `send_file`:
+
+| | نص أو أي شي | Embed | ملف |
+|---|---|---|---|
+| القناة اللي فيها الرسالة | `msg.send x` | `msg.send_embed "عنوان", "نص"` | `msg.send_file "a.png"` |
+| رد | `msg.reply x` | `msg.reply_embed "عنوان", "نص"` | |
+| أي قناة | `bot.send id, x` | `bot.send_embed id, "عنوان", "نص"` | `bot.send_file id, "a.png"` |
+| Channel | `c.send x` | `c.send_embed "عنوان", "نص"` | `c.send_file "a.png"` |
+| خاص User | `user.send x` | `user.send_embed "عنوان", "نص"` | `user.send_file "a.png"` |
+| خاص Member | `m.send x` | `m.send_embed "عنوان", "نص"` | `m.send_file "a.png"` |
+| خاص بالرقم | `bot.dm id, x` | `bot.dm_embed id, "عنوان", "نص"` | |
+| زر / سلاش | `i.reply x` | `i.reply_embed "عنوان", "نص"` | |
+
+- `send_embed` و `reply_embed`: النص واللون اختياريين. `target.send_embed "تنبيه", "لا تسبم", discord.RED`
+- `i.reply_embed "عنوان", "نص", discord.GREEN, true` (آخر شي `true` = مخفي، بس اللي ضغط يشوفه).
+
+### الألوان
+
+`discord.RED` `GREEN` `BLUE` `YELLOW` `ORANGE` `PURPLE` `PINK` `GOLD` `WHITE` `BLACK` `GRAY`، و `discord.COLOR` (أحمر eo)، أو أي لون: `discord.color("#57F287")`.
+
+### الملفات
+
+```eo
+msg.send_file "logo.png"                       # ملف لحاله
+msg.send_file "logo.png", "هذا الشعار"          # مع نص
+
+var e = discord.Embed("الشعار", "")
+e.image = "attachment://logo.png"               # الصورة داخل الـ Embed
+msg.channel.send_file "logo.png", e
+
+msg.author.send_file "report.txt"               # على الخاص
+```
+
+المسار جنب ملف البوت (أو جنب الـ exe). الحد 10MB. لو الملف مو موجود يطبع `File not found` والبوت يكمل.
+
+### حفظ البيانات
+
+eo فيها `save_json` و `load_json`، فالبيانات تبقى بعد ما تطفي البوت:
+
+```eo
+var points = load_json("points.json", {})
+
+bot.on "message", lambda msg {
+    if msg.author.bot {
+        return
+    }
+    points[msg.author.id] = get(points, msg.author.id, 0) + 1
+    save_json "points.json", points
+}
+
+bot.command "points", lambda msg, args {
+    msg.reply_embed "نقاطك", string(get(points, msg.author.id, 0)), discord.GOLD
+}
+```
 
 ---
 

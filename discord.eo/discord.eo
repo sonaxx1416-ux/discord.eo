@@ -10,7 +10,7 @@
 #
 # كل حدث يشتغل داخل prc: لو كودك طلع فيه خطأ أو علّق، يطبع الخطأ والبوت يكمل.
 
-const VERSION = "1.2.0"
+const VERSION = "1.3.0"
 const API = "https://discord.com/api/v10"
 const GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
@@ -34,6 +34,19 @@ const ALL_INTENTS = 47103
 
 const COLOR = 16281969
 const COMPONENTS_V2 = 32768
+
+# ألوان جاهزة: discord.GREEN   (أو discord.color("#57F287"))
+const RED = 15548997
+const GREEN = 5763719
+const BLUE = 5793266
+const YELLOW = 16705372
+const ORANGE = 15105570
+const PURPLE = 10181046
+const PINK = 15418782
+const GOLD = 15844367
+const WHITE = 16777215
+const BLACK = 2303786
+const GRAY = 9807270
 const HIDDEN = 64
 
 # الأحداث اللي تجيك بأسماء سهلة (والباقي بأسماء ديسكورد: "GUILD_BAN_ADD" ...)
@@ -114,8 +127,15 @@ func Bot.on event @string, f @lambda {
 }
 
 # bot.command "ping", lambda msg, args { ... }   → يشتغل لما أحد يكتب !ping
-func Bot.command name @string, f @lambda {
-    self.commands[lower(name)] = f
+# bot.command "ping", f   أو بأكثر من اسم:  bot.command ["ping", "p"], f
+func Bot.command name, f @lambda {
+    if type(name) == "list" {
+        for n in name {
+            self.commands[lower(string(n))] = f
+        }
+    } else {
+        self.commands[lower(string(name))] = f
+    }
 }
 
 # ═════ إرسال ═════
@@ -138,9 +158,15 @@ func Message.send content {
     return self.bot.send(self.channel_id, content)
 }
 
-# msg.react "👍"
-func Message.react emoji @string {
-    return self.bot.request("PUT", "/channels/" + self.channel_id + "/messages/" + self.id + "/reactions/" + url_encode(emoji) + "/@me", none)
+# msg.react "👍"   أو كذا وحدة:  msg.react ["1️⃣", "2️⃣", "3️⃣"]
+func Message.react emoji {
+    if type(emoji) == "list" {
+        for e in emoji {
+            self.react(e)
+        }
+        return none
+    }
+    return self.bot.request("PUT", "/channels/" + self.channel_id + "/messages/" + self.id + "/reactions/" + url_encode(string(emoji)) + "/@me", none)
 }
 
 # msg.edit "نص جديد"   (يعدل رسالة أرسلها البوت)
@@ -154,8 +180,8 @@ func Message.delete {
 }
 
 # msg.reply_embed "العنوان", "النص"
-func Message.reply_embed title @string, text @string {
-    return self.reply({"embeds": [embed(title, text)]})
+func Message.reply_embed title @string, text @string = "", color @int = COLOR {
+    return self.reply(make_embed(title, text, color))
 }
 
 # discord.embed("العنوان", "النص")  → صندوق مرتب تحطه في {"embeds": [...]}
@@ -193,10 +219,13 @@ func message_body b, content {
 }
 
 # أي طلب لـ Discord API:  bot.request("GET", "/users/@me", none)
-func Bot.request method @string, path @string, body = none, reason @string = "" {
+func Bot.request method @string, path @string, body = none, reason @string = "", content_type @string = "" {
     var headers = {"Authorization": "Bot " + self.token, "User-Agent": "DiscordBot (https://eolang.netlify.app, " + VERSION + ")"}
     if reason != "" {
         headers["X-Audit-Log-Reason"] = url_encode(reason)
+    }
+    if content_type != "" {
+        headers["Content-Type"] = content_type
     }
     var tries = 0
     while true {
@@ -894,8 +923,12 @@ func Interaction.reply_hidden content {
     return self._callback(4, body)
 }
 
-func Interaction.reply_embed title @string, text @string {
-    return self.reply(Embed(title, text))
+# i.reply_embed "عنوان", "نص"   ولو تبيه مخفي:  i.reply_embed "عنوان", "نص", discord.GREEN, true
+func Interaction.reply_embed title @string, text @string = "", color @int = COLOR, hidden @bool = false {
+    if hidden {
+        return self.reply_hidden(make_embed(title, text, color))
+    }
+    return self.reply(make_embed(title, text, color))
 }
 
 # يعدل الرسالة اللي فيها الزر
@@ -1167,15 +1200,11 @@ func User.send content {
 # bot.dm user, "نص"   (user = رقم أو User أو Member)
 func Bot.dm user, content {
     var id = id_of(user)
-    if not has(self.dm_channels, id) {
-        var ch = self.request("POST", "/users/@me/channels", {"recipient_id": id})
-        if ch == none or not has(ch, "id") {
-            self._log "Can't open a DM with " + id
-            return none
-        }
-        self.dm_channels[id] = string(ch["id"])
+    var cid = self._dm_channel(id)
+    if cid == "" {
+        return none
     }
-    var r = self.request("POST", "/channels/" + self.dm_channels[id] + "/messages", message_body(self, content))
+    var r = self.request("POST", "/channels/" + cid + "/messages", message_body(self, content))
     if r != none and get(r, "code", 0) == 50007 {
         self._log "User " + id + " has DMs closed"
         return none
@@ -1800,4 +1829,110 @@ func id_of x {
         return x.id
     }
     return string(x)
+}
+
+# ═════════════════════════════════════════════
+#  اختصارات: send_embed و send_file لكل شي
+# ═════════════════════════════════════════════
+
+func make_embed title @string, text @string, color @int {
+    var e = Embed(title, text)
+    e.color = color
+    return e
+}
+
+# discord.color("#57F287") → 5763719
+func color hex @string {
+    var h = lower(replace(trim(hex), "#", ""))
+    var digits = "0123456789abcdef"
+    var n = 0
+    for ch in h {
+        var d = 0
+        while d < 16 and slice(digits, d, d + 1) != ch {
+            d += 1
+        }
+        if d == 16 {
+            return COLOR
+        }
+        n = n * 16 + d
+    }
+    return n
+}
+
+# bot.send_embed channel_id, "عنوان", "نص"   (واللون اختياري: , discord.GREEN)
+func Bot.send_embed channel, title @string, text @string = "", color @int = COLOR {
+    return self.send(id_of(channel), make_embed(title, text, color))
+}
+func Message.send_embed title @string, text @string = "", color @int = COLOR {
+    return self.bot.send(self.channel_id, make_embed(title, text, color))
+}
+func Channel.send_embed title @string, text @string = "", color @int = COLOR {
+    return self.client.send(self.id, make_embed(title, text, color))
+}
+# target.send_embed "عنوان", "نص"   (على الخاص)
+func User.send_embed title @string, text @string = "", color @int = COLOR {
+    return self.client.dm(self.id, make_embed(title, text, color))
+}
+func Member.send_embed title @string, text @string = "", color @int = COLOR {
+    return self.client.dm(self.id, make_embed(title, text, color))
+}
+func Bot.dm_embed user, title @string, text @string = "", color @int = COLOR {
+    return self.dm(user, make_embed(title, text, color))
+}
+
+# ── الملفات ──
+
+# bot.send_file channel_id, "صورة.png"   (والنص أو الـ Embed اختياري)
+#   e.image = "attachment://صورة.png"  يحط الصورة داخل الـ Embed
+func Bot.send_file channel, path @string, content = "" {
+    var cid = id_of(channel)
+    if not file_exists(path) {
+        self._log "File not found: " + path
+        return none
+    }
+    var name = path
+    var parts = split(replace(path, "\\", "/"), "/")
+    name = parts[len(parts) - 1]
+    var payload = {}
+    if content != "" and content != none {
+        payload = message_body(self, content)
+    }
+    payload["attachments"] = [{"id": 0, "filename": name}]
+    var b = "eoBoundary" + string(random(100000000, 999999999))
+    var body = "--" + b + "\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n" + json_encode(payload) + "\r\n"
+    body = body + "--" + b + "\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"" + name + "\"\r\nContent-Type: application/octet-stream\r\n\r\n" + read_file(path) + "\r\n--" + b + "--\r\n"
+    return self.request("POST", "/channels/" + cid + "/messages", body, "", "multipart/form-data; boundary=" + b)
+}
+func Message.send_file path @string, content = "" {
+    return self.bot.send_file(self.channel_id, path, content)
+}
+func Channel.send_file path @string, content = "" {
+    return self.client.send_file(self.id, path, content)
+}
+func User.send_file path @string, content = "" {
+    return self.client._dm_file(self.id, path, content)
+}
+func Member.send_file path @string, content = "" {
+    return self.client._dm_file(self.id, path, content)
+}
+
+func Bot._dm_channel user {
+    var id = id_of(user)
+    if not has(self.dm_channels, id) {
+        var ch = self.request("POST", "/users/@me/channels", {"recipient_id": id})
+        if ch == none or not has(ch, "id") {
+            self._log "Can't open a DM with " + id
+            return ""
+        }
+        self.dm_channels[id] = string(ch["id"])
+    }
+    return self.dm_channels[id]
+}
+
+func Bot._dm_file user, path @string, content {
+    var cid = self._dm_channel(user)
+    if cid == "" {
+        return none
+    }
+    return self.send_file(cid, path, content)
 }
