@@ -10,7 +10,7 @@
 #
 # كل حدث يشتغل داخل prc: لو كودك طلع فيه خطأ أو علّق، يطبع الخطأ والبوت يكمل.
 
-const VERSION = "1.3.0"
+const VERSION = "1.4.0"
 const API = "https://discord.com/api/v10"
 const GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
@@ -61,7 +61,7 @@ struct User {
     mention @string
     avatar_url @string
     raw @map
-    client
+    client @(Bot, none)
 }
 
 # رسالة وصلت للبوت
@@ -71,12 +71,12 @@ struct Message {
     channel_id @string
     guild_id @string
     author @User
-    bot
+    bot @(Bot, none)
     raw @map
-    member
+    member @(Member, none)
     mentions @list
-    channel
-    guild
+    channel @(Channel, none)
+    guild @(Guild, none)
     is_dm @bool = false
 }
 
@@ -88,7 +88,7 @@ struct Bot {
     api @string = API
     gateway @string = GATEWAY
     log @bool = true
-    user
+    user @(User, none)
     handlers @map
     commands @map
     session_id @string
@@ -115,6 +115,20 @@ struct Bot {
 
 # bot.on "ready", lambda { ... }     bot.on "message", lambda msg { ... }
 # أو أي حدث من ديسكورد بالاسم: bot.on "GUILD_MEMBER_ADD", lambda data { ... }
+# @hint Bot.on f(map)
+# @hint Bot.on "ready" f()
+# @hint Bot.on "message" f(Message)
+# @hint Bot.on "message_edit" f(Message)
+# @hint Bot.on "message_delete" f(Message)
+# @hint Bot.on "member_join" f(Member)
+# @hint Bot.on "member_leave" f(Member)
+# @hint Bot.on "member_update" f(Member)
+# @hint Bot.on "reaction_add" f(Reaction)
+# @hint Bot.on "reaction_remove" f(Reaction)
+# @hint Bot.on "guild_join" f(Guild)
+# @hint Bot.on "guild_leave" f(Guild)
+# @hint Bot.on "channel_create" f(Channel)
+# @hint Bot.on "channel_delete" f(Channel)
 func Bot.on event @string, f @lambda {
     var key = event
     if lower(event) in EVENTS {
@@ -128,6 +142,7 @@ func Bot.on event @string, f @lambda {
 
 # bot.command "ping", lambda msg, args { ... }   → يشتغل لما أحد يكتب !ping
 # bot.command "ping", f   أو بأكثر من اسم:  bot.command ["ping", "p"], f
+# @hint Bot.command f(Message, list)
 func Bot.command name, f @lambda {
     if type(name) == "list" {
         for n in name {
@@ -564,6 +579,7 @@ func embed_json e {
 
 # زر:  discord.Button("النص", lambda i { ... })
 # style: "blue" "gray" "green" "red"  (أو primary secondary success danger)
+# @hint Button callback(Interaction)
 struct Button {
     label @string
     callback
@@ -575,6 +591,7 @@ struct Button {
 }
 
 # قائمة اختيار. kind: "text" "user" "role" "channel" "mention"
+# @hint Select callback(Interaction)
 struct Select {
     placeholder @string
     options @list
@@ -594,6 +611,7 @@ struct View {
 }
 
 # view.button "النص", lambda i { ... }   يرجع الزر عشان تعدله: b.style = "red"
+# @hint View.button f(Interaction)
 func View.button label @string, f {
     var b = Button(label, f)
     append self.items, b
@@ -609,12 +627,14 @@ func View.link label @string, url @string {
 }
 
 # view.select "اختر", ["أ", "ب"], lambda i { i.values[0] }
+# @hint View.select f(Interaction)
 func View.select placeholder @string, options @list, f {
     var s = Select(placeholder, options, f)
     append self.items, s
     return s
 }
 
+# @hint View.user_select f(Interaction)
 func View.user_select placeholder @string, f {
     var s = Select(placeholder, [], f)
     s.kind = "user"
@@ -622,6 +642,7 @@ func View.user_select placeholder @string, f {
     return s
 }
 
+# @hint View.role_select f(Interaction)
 func View.role_select placeholder @string, f {
     var s = Select(placeholder, [], f)
     s.kind = "role"
@@ -629,6 +650,7 @@ func View.role_select placeholder @string, f {
     return s
 }
 
+# @hint View.channel_select f(Interaction)
 func View.channel_select placeholder @string, f {
     var s = Select(placeholder, [], f)
     s.kind = "channel"
@@ -747,6 +769,7 @@ func gallery_item u {
 # ═════════════════════════════════════════════
 
 # var form = discord.Modal("العنوان", lambda i { i.fields["الاسم"] })
+# @hint Modal callback(Interaction)
 struct Modal {
     title @string
     callback
@@ -801,6 +824,7 @@ struct Option {
 }
 
 # bot.slash "ping", "يرد pong", lambda i { i.reply "pong" }
+# @hint Bot.slash f(Interaction)
 func Bot.slash name @string, description @string, f {
     var c = Command(lower(name), description, f)
     self.slash_commands[lower(name)] = c
@@ -835,6 +859,7 @@ func Command.role name @string, description @string {
 }
 
 # زر يشتغل حتى بعد ما تعيد تشغيل البوت: b.id = "verify"  ثم  bot.component "verify", lambda i { }
+# @hint Bot.component f(Interaction)
 func Bot.component id @string, f {
     self.components[id] = f
 }
@@ -892,12 +917,12 @@ struct Interaction {
     options @map
     fields @map
     user @User
-    member
-    guild
+    member @(Member, none)
+    guild @(Guild, none)
     channel_id @string
     guild_id @string
-    message
-    bot
+    message @(Message, none)
+    bot @(Bot, none)
     raw @map
     responded @bool = false
 }
@@ -1240,7 +1265,7 @@ struct Member {
     permissions @string
     guild_id @string
     raw @map
-    client
+    client @(Bot, none)
 }
 
 func make_member b, d, guild_id, user_d {
@@ -1355,7 +1380,7 @@ struct Guild {
     channels @list
     roles @list
     raw @map
-    client
+    client @(Bot, none)
 }
 
 struct Channel {
@@ -1368,7 +1393,7 @@ struct Channel {
     position @int
     mention @string
     raw @map
-    client
+    client @(Bot, none)
 }
 
 struct Role {
@@ -1379,7 +1404,7 @@ struct Role {
     mention @string
     guild_id @string
     raw @map
-    client
+    client @(Bot, none)
 }
 
 # أنواع القنوات (channel.kind)
@@ -1694,12 +1719,12 @@ func Bot._send_presence {
 struct Reaction {
     emoji @string
     user_id @string
-    member
+    member @(Member, none)
     message_id @string
     channel_id @string
     guild_id @string
     raw @map
-    client
+    client @(Bot, none)
 }
 
 # r.user()  → User (من ديسكورد)
