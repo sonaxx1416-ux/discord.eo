@@ -10,7 +10,7 @@
 #
 # كل حدث يشتغل داخل prc: لو كودك طلع فيه خطأ أو علّق، يطبع الخطأ والبوت يكمل.
 
-const VERSION = "1.4.0"
+const VERSION = "1.6.0"
 const API = "https://discord.com/api/v10"
 const GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
@@ -27,6 +27,28 @@ const GUILD_MESSAGE_REACTIONS = 1024
 const DIRECT_MESSAGES = 4096
 const DIRECT_MESSAGE_REACTIONS = 8192
 const MESSAGE_CONTENT = 32768
+# ═════ الصلاحيات: msg.member.has_permission discord.BAN_MEMBERS ═════
+const CREATE_INVITE = 1
+const KICK_MEMBERS = 2
+const BAN_MEMBERS = 4
+const ADMINISTRATOR = 8
+const MANAGE_CHANNELS = 16
+const MANAGE_GUILD = 32
+const ADD_REACTIONS = 64
+const VIEW_AUDIT_LOG = 128
+const SEND_MESSAGES = 2048
+const MANAGE_MESSAGES = 8192
+const ATTACH_FILES = 32768
+const MENTION_EVERYONE = 131072
+const MUTE_MEMBERS = 4194304
+const DEAFEN_MEMBERS = 8388608
+const MOVE_MEMBERS = 16777216
+const MANAGE_NICKNAMES = 134217728
+const MANAGE_ROLES = 268435456
+const MODERATE_MEMBERS = 1099511627776
+# نفسها بالاسم: msg.member.has_permission "ban_members"
+const PERMISSIONS = {"create_invite": 1, "kick_members": 2, "ban_members": 4, "administrator": 8, "admin": 8, "manage_channels": 16, "manage_guild": 32, "manage_server": 32, "add_reactions": 64, "view_audit_log": 128, "send_messages": 2048, "manage_messages": 8192, "attach_files": 32768, "mention_everyone": 131072, "mute_members": 4194304, "deafen_members": 8388608, "move_members": 16777216, "manage_nicknames": 134217728, "manage_roles": 268435456, "moderate_members": 1099511627776, "timeout_members": 1099511627776}
+
 # الافتراضي: السيرفرات، الرسائل، الخاص، الرياكشنات، ونص الرسائل
 const DEFAULT_INTENTS = 46593
 # كل شي (GUILD_MEMBERS و GUILD_PRESENCES و MESSAGE_CONTENT لازم تفعلها في Developer Portal)
@@ -78,6 +100,7 @@ struct Message {
     channel @(Channel, none)
     guild @(Guild, none)
     is_dm @bool = false
+    jump_url @string
 }
 
 # البوت نفسه
@@ -109,6 +132,14 @@ struct Bot {
     activity @string
     activity_kind @int = 0
     startup_guilds @map
+    # كم ثانية يقدر الأمر أو الحدث يشتغل قبل ما ينقطع (bot.timeout = 300 للأوامر الطويلة)
+    timeout @int = 60
+    command_perms @map
+    # الرد لما أحد يستخدم أمر ما عنده صلاحيته
+    no_permission @string = "❌ ما عندك صلاحية لهذا الأمر"
+    beat @float = 41.25
+    next_beat @float = 0.0
+    acked @bool = true
 }
 
 # ═════ تسجيل الأحداث والأوامر ═════
@@ -143,13 +174,19 @@ func Bot.on event @string, f @lambda {
 # bot.command "ping", lambda msg, args { ... }   → يشتغل لما أحد يكتب !ping
 # bot.command "ping", f   أو بأكثر من اسم:  bot.command ["ping", "p"], f
 # @hint Bot.command f(Message, list)
-func Bot.command name, f @lambda {
+#   وصلاحية اختيارية: bot.command "ban", f, "ban_members"   (بس اللي عنده الصلاحية يقدر يستخدمه)
+func Bot.command name, f @lambda, permission = "" {
+    var names = [name]
     if type(name) == "list" {
-        for n in name {
-            self.commands[lower(string(n))] = f
+        names = name
+    }
+    for n in names {
+        self.commands[lower(string(n))] = f
+        if permission != "" and permission != 0 {
+            self.command_perms[lower(string(n))] = permission
+        } elif has(self.command_perms, lower(string(n))) {
+            remove self.command_perms, lower(string(n))
         }
-    } else {
-        self.commands[lower(string(name))] = f
     }
 }
 
@@ -244,6 +281,7 @@ func Bot.request method @string, path @string, body = none, reason @string = "",
     }
     var tries = 0
     while true {
+        self._keepalive()
         var r = http(method, self.api + path, body, headers)
         if r["status"] == 429 and tries < 5 {
             var wait = 1
@@ -332,11 +370,11 @@ func Bot._connect url @string, resume @bool {
         return -1
     }
     self.ws = ws
-    var beat = 41.25
-    var next_beat = now() + 3600
-    var acked = true
+    self.beat = 41.25
+    self.next_beat = now() + 3600
+    self.acked = true
     while self.running {
-        var wait = next_beat - now()
+        var wait = self.next_beat - now()
         if wait < 0 {
             wait = 0
         }
@@ -346,14 +384,14 @@ func Bot._connect url @string, resume @bool {
             return ev["code"]
         }
         if ev["type"] == "timeout" {
-            if not acked {
+            if not self.acked {
                 ws_close ws, 4000
                 self.ws = none
                 return 4000
             }
             ws_send ws, {"op": 1, "d": self.seq}
-            acked = false
-            next_beat = now() + beat
+            self.acked = false
+            self.next_beat = now() + self.beat
             continue
         }
         var p = json_decode(ev["data"])
@@ -364,15 +402,15 @@ func Bot._connect url @string, resume @bool {
         if op == 0 {
             self._dispatch(text_of(p, "t"), get(p, "d", none))
         } elif op == 10 {
-            beat = p["d"]["heartbeat_interval"] / 1000.0
-            next_beat = now() + beat * random()
+            self.beat = p["d"]["heartbeat_interval"] / 1000.0
+            self.next_beat = now() + self.beat * random()
             if resume {
                 ws_send ws, {"op": 6, "d": {"token": self.token, "session_id": self.session_id, "seq": self.seq}}
             } else {
                 ws_send ws, {"op": 2, "d": {"token": self.token, "intents": self.intents, "properties": {"os": "windows", "browser": "eo", "device": "eo"}, "presence": self._presence()}}
             }
         } elif op == 11 {
-            acked = true
+            self.acked = true
         } elif op == 1 {
             ws_send ws, {"op": 1, "d": self.seq}
         } elif op == 7 {
@@ -425,13 +463,21 @@ func Bot._dispatch t @string, d {
     self._emit(t, [d])
 }
 
-# ينادي كل اللي مسجلين على الحدث، كل واحد داخل prc (حد دقيقة)
+# أمر طويل (يرسل لـ 100 عضو مثلًا): نبضة لديسكورد بين الطلبات عشان ما يقطع الاتصال
+func Bot._keepalive {
+    if self.ws != none and self.next_beat > 0 and now() >= self.next_beat {
+        ws_send self.ws, {"op": 1, "d": self.seq}
+        self.next_beat = now() + self.beat
+    }
+}
+
+# ينادي كل اللي مسجلين على الحدث، كل واحد داخل prc (حد bot.timeout ثانية)
 func Bot._emit key @string, args @list {
     if not has(self.handlers, key) {
         return
     }
     for f in self.handlers[key] {
-        prc -s 60 {
+        prc -s self.timeout {
             if len(args) == 0 {
                 f()
             } else {
@@ -455,7 +501,15 @@ func Bot._command msg @Message {
     }
     var f = self.commands[name]
     var args = slice(words, 1)
-    prc -s 60 {
+    if has(self.command_perms, name) {
+        if msg.member == none or not msg.member.has_permission(self.command_perms[name]) {
+            if self.no_permission != "" {
+                msg.reply self.no_permission
+            }
+            return
+        }
+    }
+    prc -s self.timeout {
         f(msg, args)
     }
 }
@@ -501,6 +555,7 @@ func make_user b, d {
 func make_message b @Bot, d {
     var m = Message{id: text_of(d, "id"), content: text_of(d, "content"), channel_id: text_of(d, "channel_id"), guild_id: text_of(d, "guild_id"), author: make_user(b, get(d, "author", {})), bot: b, raw: d}
     m.is_dm = m.guild_id == ""
+    m.jump_url = jump_url(m.guild_id, m.channel_id, m.id)
     for u in get(d, "mentions", []) {
         append m.mentions, make_user(b, u)
     }
@@ -1003,7 +1058,7 @@ func Bot._interaction d {
         }
     }
     if f != none {
-        prc -s 60 {
+        prc -s self.timeout {
             f(i)
         }
     }
@@ -1347,6 +1402,66 @@ func Member.has_role role {
 }
 
 # member.set_nick "اسم"   ("" يرجعه لاسمه)
+# ═════ الصلاحيات ═════
+
+# msg.member.has_permission "ban_members"   أو   msg.member.has_permission discord.BAN_MEMBERS
+#   صاحب السيرفر و Administrator عندهم كل شي
+func Member.has_permission perm {
+    var bit = permission_bit(perm)
+    if bit <= 0 {
+        if self.client != none {
+            self.client._log "Unknown permission: " + string(perm) + " (examples: administrator, ban_members, kick_members, manage_messages)"
+        }
+        return false
+    }
+    if self.is_owner() {
+        return true
+    }
+    # من الأزرار وأوامر السلاش: ديسكورد يرسل الصلاحيات محسوبة
+    if is_digits(self.permissions) {
+        var p = int(self.permissions)
+        return has_bit(p, ADMINISTRATOR) or has_bit(p, bit)
+    }
+    var g = get(self.client.guilds, self.guild_id, none)
+    if g == none {
+        return false
+    }
+    for r in g.roles {
+        # @everyone رقمها نفس رقم السيرفر
+        if r.id == self.guild_id or r.id in self.roles {
+            if has_bit(r.permissions, ADMINISTRATOR) or has_bit(r.permissions, bit) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+# msg.member.is_admin
+func Member.is_admin {
+    return self.has_permission(ADMINISTRATOR)
+}
+
+# صاحب السيرفر؟
+func Member.is_owner {
+    if self.client == none {
+        return false
+    }
+    var g = get(self.client.guilds, self.guild_id, none)
+    return g != none and g.owner_id == self.id
+}
+
+func has_bit n @int, bit @int {
+    return (n / bit) % 2 == 1
+}
+
+func permission_bit perm {
+    if type(perm) == "int" {
+        return perm
+    }
+    return get(PERMISSIONS, replace(lower(trim(string(perm))), " ", "_"), 0)
+}
+
 func Member.set_nick nick @string, reason @string = "" {
     self.nick = nick
     return self.client.request("PATCH", self._path(), {"nick": nick}, reason)
@@ -1386,6 +1501,7 @@ struct Guild {
 struct Channel {
     id @string
     name @string
+    jump_url @string
     kind @int
     topic @string
     guild_id @string
@@ -1401,6 +1517,7 @@ struct Role {
     name @string
     color @int
     position @int
+    permissions @int
     mention @string
     guild_id @string
     raw @map
@@ -1442,12 +1559,16 @@ func make_channel b, d, guild_id {
         gid = string(guild_id)
     }
     var id = text_of(d, "id")
-    return Channel{id: id, name: text_of(d, "name"), kind: get(d, "type", 0), topic: text_of(d, "topic"), guild_id: gid, parent_id: text_of(d, "parent_id"), position: get(d, "position", 0), mention: "<#" + id + ">", raw: d, client: b}
+    return Channel{id: id, name: text_of(d, "name"), jump_url: jump_url(gid, id, ""), kind: get(d, "type", 0), topic: text_of(d, "topic"), guild_id: gid, parent_id: text_of(d, "parent_id"), position: get(d, "position", 0), mention: "<#" + id + ">", raw: d, client: b}
 }
 
 func make_role b, d, guild_id {
     var id = text_of(d, "id")
-    return Role{id: id, name: text_of(d, "name"), color: get(d, "color", 0), position: get(d, "position", 0), mention: "<@&" + id + ">", guild_id: string(guild_id), raw: d, client: b}
+    var perms = 0
+    if is_digits(text_of(d, "permissions")) {
+        perms = int(text_of(d, "permissions"))
+    }
+    return Role{id: id, name: text_of(d, "name"), color: get(d, "color", 0), position: get(d, "position", 0), permissions: perms, mention: "<@&" + id + ">", guild_id: string(guild_id), raw: d, client: b}
 }
 
 # guild.member "رقم"  → Member (من ديسكورد)
@@ -1511,7 +1632,7 @@ func Guild.bans {
 # guild.find_channel "general"   (بالاسم أو الرقم)
 func Guild.find_channel name {
     for c in self.channels {
-        if c.id == string(name) or lower(c.name) == lower(string(name)) {
+        if c.id == id_of(name) or lower(c.name) == lower(string(name)) or lower(c.name) == lower(replace(string(name), "#", "")) {
             return c
         }
     }
@@ -1521,7 +1642,7 @@ func Guild.find_channel name {
 # guild.find_role "Admin"   (بالاسم أو الرقم)
 func Guild.find_role name {
     for r in self.roles {
-        if r.id == string(name) or lower(r.name) == lower(string(name)) {
+        if r.id == id_of(name) or lower(r.name) == lower(string(name)) {
             return r
         }
     }
@@ -1660,7 +1781,7 @@ func Bot.channel id {
             }
         }
     }
-    return Channel{id: cid, mention: "<#" + cid + ">", client: self}
+    return Channel{id: cid, jump_url: jump_url("", cid, ""), mention: "<#" + cid + ">", client: self}
 }
 
 # كل السيرفرات اللي فيها البوت
@@ -1829,6 +1950,17 @@ func Bot._dispatch_more t @string, d {
     }
 }
 
+# "<#123>" → "123"
+func strip_mention x @string {
+    var out = ""
+    for ch in x {
+        if ch in "0123456789" {
+            out = out + ch
+        }
+    }
+    return out
+}
+
 func is_digits s @string {
     if s == "" or len(s) > 19 {
         return false
@@ -1845,6 +1977,10 @@ func is_digits s @string {
 func id_of x {
     var t = type(x)
     if t == "string" {
+        # "<@123>" "<@!123>" "<#123>" "<@&123>" → "123"
+        if startswith(x, "<") and endswith(x, ">") {
+            return strip_mention(x)
+        }
         return x
     }
     if t == "int" {
@@ -1960,4 +2096,17 @@ func Bot._dm_file user, path @string, content {
         return none
     }
     return self.send_file(cid, path, content)
+}
+
+# رابط يفتح القناة أو الرسالة لما تضغطه
+func jump_url guild_id @string, channel_id @string, message_id @string {
+    var g = guild_id
+    if g == "" {
+        g = "@me"
+    }
+    var url = "https://discord.com/channels/" + g + "/" + channel_id
+    if message_id != "" {
+        url = url + "/" + message_id
+    }
+    return url
 }

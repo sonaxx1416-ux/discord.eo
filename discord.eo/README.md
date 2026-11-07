@@ -118,6 +118,7 @@ bot.command "say", lambda msg, args {
 | `msg.channel` | القناة كـ `Channel` |
 | `msg.mentions` | قائمة `User` للناس اللي انمنشنوا |
 | `msg.is_dm` | `true` لو الرسالة في الخاص |
+| `msg.jump_url` | رابط يفتح الرسالة |
 | `msg.raw` | كل بيانات الرسالة من ديسكورد كقاموس |
 
 | الـ method | وش تسوي |
@@ -222,6 +223,31 @@ bot.command "kick", lambda msg, args {
 | `m.role_list()` | رتبه كـ `Role` | |
 | `m.set_nick "اسم"` | يغير لقبه (`""` يرجعه) | Manage Nicknames |
 
+### الصلاحيات
+
+```eo
+# الطريقة السهلة: الأمر نفسه يطلب صلاحية (والباقين يوصلهم رد ❌)
+bot.command ["meeting", "m"], lambda msg, args {
+    ...
+}, "administrator"
+
+# أو تفحص بنفسك داخل الأمر
+if not msg.member.has_permission("ban_members") {
+    return msg.reply "هذا الأمر للإدارة بس"
+}
+```
+
+| | |
+|---|---|
+| `m.has_permission "ban_members"` | بالاسم، أو `discord.BAN_MEMBERS` |
+| `m.is_admin` | عنده Administrator |
+| `m.is_owner` | صاحب السيرفر |
+| `bot.no_permission = "..."` | الرد لما أحد ما عنده صلاحية الأمر (`""` = بدون رد) |
+
+الأسماء: `administrator` `manage_guild` `manage_channels` `manage_roles` `manage_messages` `manage_nicknames` `kick_members` `ban_members` `moderate_members` (التايم أوت) `mute_members` `move_members` `mention_everyone` `view_audit_log` `send_messages` `add_reactions` `attach_files` `create_invite`.
+
+صاحب السيرفر و Administrator يعدّون كل الفحوصات. الصلاحيات تنحسب من رتب العضو (ما تشمل صلاحيات قناة معينة).
+
 السبب يطلع في سجل السيرفر (Audit Log). البوت ما يقدر يطرد أو يعطي رتبة لأحد رتبته أعلى من رتبة البوت.
 
 ## الخاص
@@ -252,7 +278,7 @@ bot.command "server", lambda msg, args {
 |---|---|
 | `g.id` ، `g.name` ، `g.owner_id` ، `g.member_count` ، `g.icon_url` | معلوماته |
 | `g.channels` ، `g.roles` | قوائم `Channel` و `Role` (تتحدث لحالها) |
-| `g.find_channel "general"` | قناة بالاسم أو الرقم، أو `none` |
+| `g.find_channel "general"` | قناة بالاسم أو الرقم أو المنشن (`args[0]` لو كتب `#الاجتماع`)، أو `none` |
 | `g.find_role "Admin"` | رتبة بالاسم أو الرقم، أو `none` |
 | `g.member id` | `Member` من ديسكورد (`id` = رقم أو `User`) |
 | `g.members` / `g.members 500` | كل الأعضاء (يحتاج `GUILD_MEMBERS`) |
@@ -269,6 +295,7 @@ bot.command "server", lambda msg, args {
 | `Channel` | |
 |---|---|
 | `c.id` ، `c.name` ، `c.kind` ، `c.topic` ، `c.mention` ، `c.parent_id` | `kind`: `discord.TEXT` `VOICE` `CATEGORY` `NEWS` `STAGE` `FORUM` |
+| `c.jump_url` | رابط يفتح القناة (وللصوتية يدخلك المكالمة) |
 | `c.send x` | ترسل فيها |
 | `c.history` / `c.history 100` | آخر الرسايل كـ `Message` |
 | `c.purge 20` | تحذف آخر 20 (لين 100، أحدث من 14 يوم). ترجع العدد |
@@ -548,6 +575,7 @@ msg.reply e
   ```
   [ProcessError: Error (line 20): division by zero]
   ```
+- كل أمر أو حدث له **دقيقة** (`bot.timeout = 60`). أمر يرسل لكل الأعضاء ياخذ أطول، فكبّرها: `bot.timeout = 600`. وهو شغال البوت يرسل نبضاته لديسكورد بين الطلبات فما ينقطع، بس ما يرد على أوامر ثانية لين يخلص.
 - خل الأحداث **سريعة**. وهي شغالة، البوت ما يقدر يرسل نبضات لديسكورد. لو حدث أخذ أكثر من 40 ثانية تقريبًا، ديسكورد يقطع الاتصال، والمكتبة ترجع تتصل لحالها.
 - لو انقطع النت أو ديسكورد قفل الاتصال، المكتبة **ترجع تتصل وتكمل من وين وقفت**.
 - لو ديسكورد قال "انتظر" (429)، المكتبة تنتظر وتعيد المحاولة.
